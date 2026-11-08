@@ -16,6 +16,7 @@
 
 ## 开工入口
 
-- [首周任务与验收](docs/first-week.md)
+- [四人职责、交接与首周验收](docs/first-week.md)
+- [统一开发与协作规范](docs/team-standards.md)
 - 本机素材放在 `local-data/`，模型权重放在 `weights/`，实验生成结果放在 `outputs/`。这些目录由 Git 忽略。
 - 第三方代码、模型和可公开素材随提交记录来源和许可。采集本人影像前取得同意，个人影像和由其生成的模型保存在本地。
