@@ -1,0 +1,29 @@
+# 本地采集、模型和实验输出
+/local-data/
+/weights/
+/outputs/
+
+# 环境变量及 Android 签名
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+
+# Android / Gradle
+.gradle/
+.kotlin/
+.idea/
+*.iml
+build/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 操作系统
+.DS_Store
+Thumbs.db
