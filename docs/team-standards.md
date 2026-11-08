@@ -26,6 +26,8 @@
 
 ## 代码和接口
 
+运行位置、模块边界、接口和资产版本以[整体架构](architecture.md)为准。修改约定时同步更新产出方、使用方和示例。
+
 - 代码按实际模块组织，Android 界面与模型实验各有独立的运行说明。沿用所用语言的默认格式。变量和函数命名说明用途，注释解释复杂逻辑和数据限制。
 - 新增依赖要记录用途与版本。安装、编译和运行步骤写在对应目录的 README，配置示例只放占位值。改动时一并更新相关说明。
 - 同一件衣物从素材清单、三维资产到推荐结果始终用同一个编号，如 `top-001`。人物用独立编号，如 `person-001`。资产交接写清编号、文件路径、格式和加载方式。
@@ -44,16 +46,9 @@
 
 ## 资产交接的最小格式
 
-A 与队长把文件和清单交给 B，C 使用同一份清单复测。清单保存在 `outputs/handoff/assets.csv`，每个资产一行。文件名用编号，后缀用实际导出格式。路径相对于 `outputs/handoff/`。资产来源填 `test` 或 `participant`，文件存在并经 B 确认可加载后才用于换装。
+使用[整体架构中的 manifest 格式](architecture.md)。人物和两件上衣按一个目录版本整包交接，路径示例为 `outputs/handoff/person-001/v1/manifest.json`。清单路径相对于资产包，包含人物、姿势、目录版本及每个资产的编号。属性或适配变化时生成新版本，C 按同一版本复测。
 
-```csv
-asset_type,asset_id,relative_file,source
-person,person-001,person-001.glb,participant
-garment,top-001,top-001.glb,participant
-garment,top-002,top-002.glb,participant
-```
-
-以上是填写示例。参与者素材及派生模型随清单留在本地或团队内部，公开记录只写编号和结果。
+首周人工量取的 `measurements.csv` 保留作采集记录。旧 `assets.csv` 交接示例由 manifest 约定替代。个人资产和清单保存在本地或团队内部。
 
 ## 验收和 AI 记录
 

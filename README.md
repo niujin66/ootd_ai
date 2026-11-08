@@ -16,6 +16,7 @@
 
 ## 开工入口
 
+- [整体架构、资产格式与接口约定](docs/architecture.md)
 - [今天就开工：四人任务卡、交付文件和验收步骤](docs/first-week.md)
 - [统一开发与协作规范](docs/team-standards.md)
 - 本机素材放在 `local-data/`，模型权重放在 `weights/`，实验生成结果放在 `outputs/`。这些目录由 Git 忽略。
