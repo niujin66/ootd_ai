@@ -2,6 +2,7 @@
 /local-data/
 /weights/
 /outputs/
+/android/app/src/main/assets/local-demo/
 
 # 环境变量及 Android 签名
 .env
