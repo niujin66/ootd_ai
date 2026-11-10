@@ -19,6 +19,8 @@
 
 2026-11-10 从源码 ZIP 解压目录复跑，Windows、Python 3.12。73 项中 72 通过、0 失败、1 项因符号链接权限跳过。匿名包 fixture-anonymous-01 首次导入成功，相同内容重复导入安全跳过。HTTP 健康、鉴权及目录检查通过，三份 GLB 下载长度和 SHA-256 匹配。模拟推荐按浅色、深色、红色偏好依次返回 top-001、top-002、no_match。匿名模型的 Android 真机效果待单独复测。
 
+从匿名源码 ZIP 解压后，使用 JDK 25 和 Android SDK 37 执行 gradlew.bat :app:assembleDebug，构建成功。比对 APK 中的清单和三件 GLB，四份文件均与 ZIP 内对应文件逐字节一致。该结果覆盖构建和打包，匿名样例的真机画面待复测。
+
 ## 每次检查填写
 
 ```text
