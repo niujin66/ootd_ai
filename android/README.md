@@ -109,10 +109,73 @@ cd android
   手势验证必须真人操作
 - 未测项：模拟器未验证；深色模式、横屏未验证；换衣失败回滚未构造场景
 
+## B03：目录下发与推荐接入
+
+### 用到的接口
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/v1/health` | 联调前探活 |
+| GET | `/v1/catalog?person_id=person-001` | 取人物与衣物清单（含 `size_bytes`、`sha256`） |
+| GET | `/v1/assets/{person_id}/{catalog_version}/{asset_id}` | 下载单个资产 |
+| POST | `/v1/recommendations` | 按场合与偏好取推荐结果 |
+
+请求头 `Authorization: Bearer <token>`；`401 / 404 / 409 / 422` 均有对应提示。
+
+### 配置（不进仓库）
+
+在 `android/local.properties` 里加两项，构建时读入 `BuildConfig`：
+
+```properties
+ootd.apiBaseUrl=http://127.0.0.1:8000
+ootd.apiToken=你的令牌
+```
+
+`local.properties` 已被忽略，令牌不要写进代码或提交。
+
+### 真机联调：用 adb reverse，不依赖局域网
+
+```bash
+adb reverse tcp:8000 tcp:8000      # 手机的 127.0.0.1:8000 转到电脑
+adb reverse --list                 # 确认映射还在（拔插后可能需要重设）
+```
+
+这样手机不用连同一个 WiFi，也不用开防火墙。**注意**：debug 构建允许明文 HTTP（`app/src/debug/AndroidManifest.xml`），release 仍强制 HTTPS。
+
+### 校验与切换策略
+
+1. 下载到临时目录，逐个核对 `size_bytes` 与 `sha256`
+2. **整版校验通过才切换**；任何一件失败都保留上一套资源和当前画面
+3. 下载到的包放在 `cacheDir/ootd/<person_id>/<catalog_version>/`，下次启动可直接用
+
+### 实测记录（Xiaomi 25098PN5AC / Android 17）
+
+| 场景 | 结果 |
+|---|---|
+| 无令牌点「拉取目录」 | 提示「未授权：缺少或错误的访问令牌（已保留当前资源）」，画面不崩、资源不换 —— **通过** |
+| 带令牌拉取目录 | 顶部变为 `服务端 · fixture-face-01 · pose-001`，人物与两件衣物正常渲染 —— **通过** |
+| 点「推荐」（上班 / 优先浅色） | 显示【模拟推荐】与理由，衣物切到 `top-001` —— **通过** |
+| 先切 `top-002` 再点「推荐」 | 自动切回 `top-001`，说明 `garment_id` 真的驱动了换衣 —— **通过** |
+
+### 已知问题
+
+- SceneView 的 `rememberModelLoadState` 只收字符串，内部按 APK 资产去查；磁盘绝对路径必须用
+  `createModelInstance(File)` 直接读，且**必须留在主线程**（Filament 引擎有线程亲和性，
+  放后台线程会 native 崩溃）
+- 网络调用必须离开主线程，否则 `NetworkOnMainThreadException`（该异常没有 message，
+  界面上只会剩一句笼统的失败提示）
+- 未测项：`409` 版本冲突、`422` 参数校验、断网中途下载、并发重复拉取
+
+### 说明：这次联调用的是本地等价桩服务
+
+队伍的真实服务（C 的 T03）用 venv + FastAPI 启动，本机装依赖时 PyPI 下载反复卡住，
+因此按 `server/app.py` 的契约写了一个**只用标准库的等价桩服务**做端到端联调，
+字段与状态码与真实服务一致。**这不代表真实服务已验证**，等 C 的服务可跑通后需要复测一遍。
+
 ## 后续
 
-- B03：接 `/v1/catalog` 拉目录、按 `asset_url` 下载并校验 `size_bytes`/`sha256`；
-  调 `/v1/recommendations` 把 `garment_id` 接到换衣入口，显示 `reason` 与 `mode`
+- 等 C 的真实 mock 服务可跑通后复测：`401 / 404 / 409 / 422` 全部分支
+- B04：接入真实衣物资产；推荐结果缓存与「换一件」能力
 
 ## 说明
 
