@@ -46,7 +46,31 @@ import io.github.sceneview.node.ModelNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoadState
 import io.github.sceneview.rememberModelLoader
+import io.github.sceneview.loaders.ModelLoader
 import kotlinx.coroutines.launch
+
+/**
+ * 加载模型：APK 内的资产（相对路径）走 SceneView 的资产加载；
+ * 服务端下载到磁盘的包是绝对路径，必须用 File 直接读，
+ * 否则 Filament 会把它当成 asset 名去查，必然失败。
+ */
+@Composable
+private fun rememberModelState(modelLoader: ModelLoader, path: String?): ModelLoadState? {
+    if (path.isNullOrEmpty()) return null
+    if (!path.startsWith("/")) return rememberModelLoadState(modelLoader, path)
+
+    var state by remember(path) { mutableStateOf<ModelLoadState?>(null) }
+    LaunchedEffect(path) {
+        state = null
+        // Filament 引擎只能在它创建的那个线程（主线程）上用，放后台线程会直接 native 崩溃。
+        state = runCatching { modelLoader.createModelInstance(java.io.File(path)) }
+            .fold(
+                onSuccess = { ModelLoadState.Ready(it) },
+                onFailure = { ModelLoadState.Failed(it) }
+            )
+    }
+    return state
+}
 
 /**
  * 三维试衣页。
@@ -186,8 +210,8 @@ private fun TryOnContent(
     val requested = garments.firstOrNull { it.assetId == requestedGarmentId }
 
     key(assets, sceneRetry) {
-        val personState = assets.personPath?.let { rememberModelLoadState(modelLoader, it) }
-        val garmentState = requested?.let { rememberModelLoadState(modelLoader, it.path) }
+        val personState = rememberModelState(modelLoader, assets.personPath)
+        val garmentState = rememberModelState(modelLoader, requested?.path)
 
         LaunchedEffect(garmentState, requestedGarmentId) {
             if (rollbackGuard) return@LaunchedEffect
@@ -245,14 +269,14 @@ private fun TryOnContent(
                 modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
             ) { Text("返回") }
 
-            // 顶部：当前资源来源
+            // 顶部：当前资源来源（避开状态栏）
             Text(
                 text = "${assets.sourceLabel} · ${assets.catalogVersion} · ${assets.poseId}",
                 color = Color.White,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
+                    .padding(top = 44.dp, end = 12.dp)
                     .background(Color.Black.copy(alpha = 0.45f))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             )
@@ -282,6 +306,7 @@ private fun TryOnContent(
 
                 // 推荐：场合 + 偏好
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -290,14 +315,14 @@ private fun TryOnContent(
                         onValueChange = { sceneText = it },
                         label = { Text("场合") },
                         singleLine = true,
-                        modifier = Modifier.width(120.dp)
+                        modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = preferenceText,
                         onValueChange = { preferenceText = it },
                         label = { Text("偏好") },
                         singleLine = true,
-                        modifier = Modifier.width(150.dp)
+                        modifier = Modifier.weight(1f)
                     )
                     Button(
                         onClick = {
@@ -344,26 +369,32 @@ private fun TryOnContent(
 
                 Spacer(Modifier.height(8.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     garments.forEach { g ->
                         val isCurrent = g.assetId == appliedGarmentId
+                        val buttonModifier = Modifier.weight(1f)
                         if (isCurrent) {
-                            Button(onClick = { }) { Text(g.label) }
+                            Button(onClick = { }, modifier = buttonModifier) {
+                                Text(g.label, maxLines = 1)
+                            }
                         } else {
                             OutlinedButton(
                                 onClick = {
                                     garmentError = null
                                     rollbackGuard = false
                                     requestedGarmentId = g.assetId
-                                }
-                            ) { Text(g.label) }
+                                },
+                                modifier = buttonModifier
+                            ) { Text(g.label, maxLines = 1) }
                         }
                     }
-                    if (!syncing) {
-                        OutlinedButton(onClick = onSyncRemote) { Text("拉取服务端目录") }
-                    } else {
-                        OutlinedButton(onClick = { }) { Text("同步中…") }
-                    }
+                    OutlinedButton(
+                        onClick = if (syncing) ({}) else onSyncRemote,
+                        modifier = Modifier.weight(1.1f)
+                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1) }
                 }
             }
         }
