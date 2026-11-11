@@ -47,7 +47,9 @@ import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoadState
 import io.github.sceneview.rememberModelLoader
 import io.github.sceneview.loaders.ModelLoader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 加载模型：APK 内的资产（相对路径）走 SceneView 的资产加载；
@@ -156,16 +158,19 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncError = syncError,
                 onRecommend = { scene, preference, onResult ->
                     scope.launch {
-                        val outcome = runCatching {
-                            api.recommend(
-                                RecommendationRequest(
-                                    requestId = "req-" + System.currentTimeMillis(),
-                                    personId = current.personId,
-                                    catalogVersion = current.catalogVersion,
-                                    scene = scene,
-                                    preference = preference
+                        // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching {
+                                api.recommend(
+                                    RecommendationRequest(
+                                        requestId = "req-" + System.currentTimeMillis(),
+                                        personId = current.personId,
+                                        catalogVersion = current.catalogVersion,
+                                        scene = scene,
+                                        preference = preference
+                                    )
                                 )
-                            )
+                            }
                         }
                         onResult(outcome)
                     }
