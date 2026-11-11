@@ -1,7 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+// 联调地址与令牌从 local.properties 读，不进仓库。
+// 缺省指向 adb reverse 的本机端口，令牌留空（服务端未配置令牌时可用）。
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.isFile) f.inputStream().use { load(it) }
+}
+val ootdApiBaseUrl: String = localProps.getProperty("ootd.apiBaseUrl") ?: "http://127.0.0.1:8000"
+val ootdApiToken: String = localProps.getProperty("ootd.apiToken") ?: ""
 
 android {
     namespace = "com.ootd.ai"
@@ -17,6 +28,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "OOTD_API_BASE_URL", "\"$ootdApiBaseUrl\"")
+        buildConfigField("String", "OOTD_API_TOKEN", "\"$ootdApiToken\"")
     }
 
     buildTypes {
@@ -38,6 +52,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

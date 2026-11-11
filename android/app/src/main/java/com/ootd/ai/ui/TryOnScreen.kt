@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +24,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,97 +32,162 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.ootd.ai.BuildConfig
+import com.ootd.ai.data.ActiveAssets
+import com.ootd.ai.data.CatalogApi
+import com.ootd.ai.data.GarmentOption
+import com.ootd.ai.data.LocalAssetRepository
+import com.ootd.ai.data.RecommendationRequest
+import com.ootd.ai.data.RemotePackageRepository
+import com.ootd.ai.data.toActiveAssets
 import io.github.sceneview.ModelLoadState
 import io.github.sceneview.SceneView
 import io.github.sceneview.node.ModelNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoadState
 import io.github.sceneview.rememberModelLoader
-import com.ootd.ai.data.AssetManifest
-import com.ootd.ai.data.LocalAssetRepository
+import kotlinx.coroutines.launch
 
 /**
- * 三维试衣页（B02）。
+ * 三维试衣页。
  *
- * 从 assets/local-demo 读 manifest，加载同一个人物和衣物，手指拖动可绕人物旋转。
- * 三态：加载中 / 失败（可重试）/ 就绪。换衣失败时回滚到上一件，不让人物消失。
+ * B02：从 assets/local-demo 加载本地包，手指拖动旋转、两件衣物切换。
+ * B03：在旁边加远端目录入口 —— 拉 /v1/catalog、下载整包、校验 size 与 sha256，
+ *      整版通过才切换；再接 /v1/recommendations 驱动换衣，展示理由与模式。
  */
 @Composable
 fun TryOnScreen(onBack: () -> Unit) {
 
     val context = LocalContext.current
-    val repository = remember { LocalAssetRepository(context) }
+    val scope = rememberCoroutineScope()
 
-    // 清单读取结果。null = 还在读。
-    var manifestResult by remember { mutableStateOf<Result<AssetManifest>?>(null) }
-    var manifestRetry by remember { mutableIntStateOf(0) }
+    val localRepository = remember { LocalAssetRepository(context) }
+    val api = remember { CatalogApi(BuildConfig.OOTD_API_BASE_URL, BuildConfig.OOTD_API_TOKEN) }
+    val remoteRepository = remember { RemotePackageRepository(context, api) }
 
-    LaunchedEffect(manifestRetry) {
-        manifestResult = null
-        manifestResult = runCatching { repository.loadManifest() }
+    // 本地包：读不到就保持 null，不阻塞远端流程
+    var localAssets by remember { mutableStateOf<ActiveAssets?>(null) }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    // 远端包
+    var remoteAssets by remember { mutableStateOf<ActiveAssets?>(null) }
+    var syncing by remember { mutableStateOf(false) }
+    var syncStatus by remember { mutableStateOf<String?>(null) }
+    var syncError by remember { mutableStateOf<String?>(null) }
+
+    // 当前生效的一套资源
+    var active by remember { mutableStateOf<ActiveAssets?>(null) }
+
+    LaunchedEffect(Unit) {
+        runCatching { localRepository.loadActiveAssets() }
+            .onSuccess {
+                localAssets = it
+                if (active == null) active = it
+            }
+            .onFailure { localError = it.message ?: "本地资产包读取失败" }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        when (val result = manifestResult) {
-            null -> CenteredStatus(text = "正在读取资产清单…")
-
-            else -> when (val manifest = result.getOrNull()) {
-                null -> ManifestError(
-                    message = result.exceptionOrNull()?.message ?: "资产清单读取失败",
-                    onRetry = { manifestRetry++ },
-                    onBack = onBack
-                )
-
-                else -> TryOnContent(
-                    manifest = manifest,
-                    repository = repository,
-                    onBack = onBack
-                )
+    fun syncRemote() {
+        if (syncing) return
+        syncing = true
+        syncError = null
+        syncStatus = "准备中…"
+        scope.launch {
+            runCatching {
+                remoteRepository.sync(personId = "person-001") { syncStatus = it }
+            }.onSuccess { pkg ->
+                val assets = pkg.toActiveAssets()
+                remoteAssets = assets
+                active = assets
+                syncStatus = "已加载远端目录 ${pkg.catalog.catalogVersion}"
+            }.onFailure { t ->
+                // 失败：保留上一套资源与当前画面
+                syncError = t.message ?: t::class.simpleName ?: "未知错误"
+                syncStatus = null
             }
+            syncing = false
+        }
+    }
+
+    val current = active
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        when {
+            current == null && localError != null && !syncing ->
+                ManifestError(
+                    message = localError ?: "",
+                    onRetry = { syncRemote() },
+                    onBack = onBack
+                )
+
+            current == null ->
+                CenteredStatus(text = syncStatus ?: "正在读取资产…")
+
+            else -> TryOnContent(
+                assets = current,
+                onBack = onBack,
+                onSyncRemote = { syncRemote() },
+                syncing = syncing,
+                syncStatus = syncStatus,
+                syncError = syncError,
+                onRecommend = { scene, preference, onResult ->
+                    scope.launch {
+                        val outcome = runCatching {
+                            api.recommend(
+                                RecommendationRequest(
+                                    requestId = "req-" + System.currentTimeMillis(),
+                                    personId = current.personId,
+                                    catalogVersion = current.catalogVersion,
+                                    scene = scene,
+                                    preference = preference
+                                )
+                            )
+                        }
+                        onResult(outcome)
+                    }
+                }
+            )
         }
     }
 }
 
 @Composable
 private fun TryOnContent(
-    manifest: AssetManifest,
-    repository: LocalAssetRepository,
-    onBack: () -> Unit
+    assets: ActiveAssets,
+    onBack: () -> Unit,
+    onSyncRemote: () -> Unit,
+    syncing: Boolean,
+    syncStatus: String?,
+    syncError: String?,
+    onRecommend: (
+        scene: String,
+        preference: String,
+        onResult: (Result<com.ootd.ai.data.RecommendationResult>) -> Unit
+    ) -> Unit
 ) {
     val engine = rememberEngine()
     val modelLoader = rememberModelLoader(engine)
 
-    val person = manifest.person
-    val garments = manifest.garments
+    val garments = assets.garments
 
-    // 正在显示的衣服。换衣失败时回滚到这个值。
-    var appliedGarmentId by remember { mutableStateOf(garments.firstOrNull()?.assetId) }
-    // 用户点了哪件（可能加载失败）。
-    var requestedGarmentId by remember { mutableStateOf(appliedGarmentId) }
-    // 换衣失败提示 + 回滚保护，避免失败后反复重试同一条路径。
+    var appliedGarmentId by remember(assets) { mutableStateOf(garments.firstOrNull()?.assetId) }
+    var requestedGarmentId by remember(assets) { mutableStateOf(appliedGarmentId) }
     var garmentError by remember { mutableStateOf<String?>(null) }
     var rollbackGuard by remember { mutableStateOf(false) }
     var sceneRetry by remember { mutableIntStateOf(0) }
 
-    val personPath = person?.let { repository.assetPath(it) }
-    val requestedGarment = manifest.garmentById(requestedGarmentId.orEmpty())
-    val requestedGarmentPath = requestedGarment?.let { repository.assetPath(it) }
+    // 推荐状态
+    var sceneText by remember { mutableStateOf("上班") }
+    var preferenceText by remember { mutableStateOf("优先浅色") }
+    var recommending by remember { mutableStateOf(false) }
+    var recommendation by remember { mutableStateOf<com.ootd.ai.data.RecommendationResult?>(null) }
+    var recommendationError by remember { mutableStateOf<String?>(null) }
 
-    if (personPath == null) {
-        ManifestError(
-            message = "清单里没有人物资产（asset_type=person）",
-            onRetry = { },
-            onBack = onBack
-        )
-        return
-    }
+    val requested = garments.firstOrNull { it.assetId == requestedGarmentId }
 
-    // 换衣服：加载成功才提交，失败回滚到上一件。
-    key(sceneRetry) {
-        val personState = rememberModelLoadState(modelLoader, personPath)
-        val garmentState = requestedGarmentPath?.let {
-            rememberModelLoadState(modelLoader, it)
-        }
+    key(assets, sceneRetry) {
+        val personState = assets.personPath?.let { rememberModelLoadState(modelLoader, it) }
+        val garmentState = requested?.let { rememberModelLoadState(modelLoader, it.path) }
 
         LaunchedEffect(garmentState, requestedGarmentId) {
             if (rollbackGuard) return@LaunchedEffect
@@ -132,9 +199,8 @@ private fun TryOnContent(
 
                 is ModelLoadState.Failed -> {
                     if (requestedGarmentId != appliedGarmentId) {
-                        garmentError = "这件没加载出来：" +
-                            (state.error.message ?: "无法识别的 glTF 错误") +
-                            "（已保留当前衣物）"
+                        garmentError = "这件没加载出来（已保留当前衣物）：" +
+                            (state.error.message ?: "无法识别的 glTF 错误")
                         rollbackGuard = true
                         requestedGarmentId = appliedGarmentId
                     } else {
@@ -147,33 +213,24 @@ private fun TryOnContent(
             }
         }
 
-        LaunchedEffect(requestedGarmentPath) {
+        LaunchedEffect(requestedGarmentId) {
             if (rollbackGuard) rollbackGuard = false
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-
             SceneView(
                 modifier = Modifier.fillMaxSize(),
                 engine = engine,
                 modelLoader = modelLoader
             ) {
-                // 人物和衣物是同一个父节点下的两个独立模型，共用 pose-001 和同一原点，
-                // 因此不需要各自缩放：统一按米制原尺寸显示。
-                (personState as? ModelLoadState.Ready)?.let { ready ->
-                    ModelNode(modelInstance = ready.instance)
-                }
-                (garmentState as? ModelLoadState.Ready)?.let { ready ->
-                    ModelNode(modelInstance = ready.instance)
-                }
+                (personState as? ModelLoadState.Ready)?.let { ModelNode(modelInstance = it.instance) }
+                (garmentState as? ModelLoadState.Ready)?.let { ModelNode(modelInstance = it.instance) }
             }
 
-            // 加载中
-            if (personState is ModelLoadState.Loading) {
+            if (personState is ModelLoadState.Loading || personState == null) {
                 CenteredCard(text = "正在加载人物…")
             }
 
-            // 人物失败：整个场景不可用，只能重试
             (personState as? ModelLoadState.Failed)?.let { failed ->
                 FailedCard(
                     title = "人物加载失败",
@@ -183,73 +240,131 @@ private fun TryOnContent(
                 )
             }
 
-            // 顶部返回
             OutlinedButton(
                 onClick = onBack,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(16.dp)
-            ) {
-                Text("返回")
-            }
+                modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
+            ) { Text("返回") }
 
-            // 底部：衣物切换 + 状态
+            // 顶部：当前资源来源
+            Text(
+                text = "${assets.sourceLabel} · ${assets.catalogVersion} · ${assets.poseId}",
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(12.dp)
             ) {
-                garmentError?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFFFD54F)
-                    )
-                    Spacer(Modifier.height(8.dp))
+                syncError?.let {
+                    Text("远端同步失败：$it（已保留当前资源）",
+                        color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(6.dp))
+                }
+                syncStatus?.let {
+                    Text(it, color = Color.White.copy(alpha = 0.85f),
+                        style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(6.dp))
                 }
 
-                when {
-                    garmentState is ModelLoadState.Loading ->
-                        Text("正在切换衣物…", color = Color.White)
+                garmentError?.let {
+                    Text(it, color = Color(0xFFFFD54F), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(6.dp))
+                }
 
-                    garmentState is ModelLoadState.Failed && garmentError == null ->
-                        Text("衣物加载失败", color = Color(0xFFFFD54F))
+                // 推荐：场合 + 偏好
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = sceneText,
+                        onValueChange = { sceneText = it },
+                        label = { Text("场合") },
+                        singleLine = true,
+                        modifier = Modifier.width(120.dp)
+                    )
+                    OutlinedTextField(
+                        value = preferenceText,
+                        onValueChange = { preferenceText = it },
+                        label = { Text("偏好") },
+                        singleLine = true,
+                        modifier = Modifier.width(150.dp)
+                    )
+                    Button(
+                        onClick = {
+                            recommending = true
+                            recommendationError = null
+                            onRecommend(sceneText, preferenceText) { result ->
+                                recommending = false
+                                result.onSuccess { r ->
+                                    recommendation = r
+                                    if (r.isNoMatch) {
+                                        recommendationError = r.reason.ifBlank { "没有合适的衣物" }
+                                    } else {
+                                        val target = garments.firstOrNull { it.assetId == r.garmentId }
+                                        if (target == null) {
+                                            recommendationError =
+                                                "返回的编号 ${r.garmentId} 不在当前目录，保持当前衣物"
+                                        } else {
+                                            garmentError = null
+                                            rollbackGuard = false
+                                            requestedGarmentId = target.assetId
+                                        }
+                                    }
+                                }.onFailure { t ->
+                                    recommendationError = t.message ?: "推荐请求失败"
+                                }
+                            }
+                        },
+                        enabled = !recommending
+                    ) { Text(if (recommending) "…" else "推荐") }
+                }
 
-                    else -> Unit
+                recommendation?.let { r ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = (if (r.isMock) "【模拟推荐】" else "【AI 推荐】") + r.reason,
+                        color = if (r.isMock) Color(0xFFFFD54F) else Color(0xFF80D8FF),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                recommendationError?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall)
                 }
 
                 Spacer(Modifier.height(8.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    garments.forEach { garment ->
-                        val isCurrent = garment.assetId == appliedGarmentId
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    garments.forEach { g ->
+                        val isCurrent = g.assetId == appliedGarmentId
                         if (isCurrent) {
-                            Button(onClick = { }) {
-                                Text(garment.displayName ?: garment.assetId)
-                            }
+                            Button(onClick = { }) { Text(g.label) }
                         } else {
                             OutlinedButton(
                                 onClick = {
                                     garmentError = null
                                     rollbackGuard = false
-                                    requestedGarmentId = garment.assetId
+                                    requestedGarmentId = g.assetId
                                 }
-                            ) {
-                                Text(garment.displayName ?: garment.assetId)
-                            }
+                            ) { Text(g.label) }
                         }
                     }
+                    if (!syncing) {
+                        OutlinedButton(onClick = onSyncRemote) { Text("拉取服务端目录") }
+                    } else {
+                        OutlinedButton(onClick = { }) { Text("同步中…") }
+                    }
                 }
-
-                Spacer(Modifier.height(8.dp))
-
-                Text(
-                    text = "拖动手势可绕人物旋转 · 目录 ${manifest.catalogVersion} · 姿势 ${manifest.poseId}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.8f)
-                )
             }
         }
     }
@@ -323,14 +438,9 @@ private fun ManifestError(
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .padding(24.dp)
+            modifier = Modifier.fillMaxWidth(0.9f).padding(24.dp)
         ) {
-            Text(
-                "没有找到三维资产",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text("没有找到三维资产", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             Text(
                 text = message,
@@ -339,7 +449,7 @@ private fun ManifestError(
             )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("重试") }
+                Button(onClick = onRetry) { Text("拉取服务端目录") }
                 OutlinedButton(onClick = onBack) { Text("返回") }
             }
         }
