@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ootd.ai.BuildConfig
 import com.ootd.ai.data.ActiveAssets
+import com.ootd.ai.data.ApiException
 import com.ootd.ai.data.CatalogApi
 import com.ootd.ai.data.GarmentOption
 import com.ootd.ai.data.LocalAssetRepository
@@ -89,6 +90,27 @@ private fun rememberModelState(modelLoader: ModelLoader, path: String?): ModelLo
  * B03：在旁边加远端目录入口 —— 拉 /v1/catalog、下载整包、校验 size 与 sha256，
  *      整版通过才切换；再接 /v1/recommendations 驱动换衣，展示理由与模式。
  */
+/**
+ * 把底层异常翻译成用户能看懂的一句话。
+ *
+ * 直接展示 t.message 会把 okhttp 内部对象名（如 Address@eeea04995）铺满屏幕，
+ * 用户看不懂也帮不上忙。这里按类型分：网络类给中文结论，业务类保留服务端原话。
+ */
+private fun readableSyncError(t: Throwable): String = when (t) {
+    // 业务错误：服务端明确回了状态码，原话有信息量，保留
+    is ApiException -> t.message?.takeIf { it.isNotBlank() } ?: "服务端返回 HTTP ${t.code}"
+    is java.net.UnknownHostException -> "找不到服务端地址，请检查网络"
+    is java.net.ConnectException -> "连不上服务端"
+    is java.net.SocketTimeoutException -> "连接服务端超时"
+    is javax.net.ssl.SSLException -> "和服务端的安全连接建立失败"
+    is java.io.IOException -> "网络连接中断"
+    // 下载后的校验失败（缺文件、大小或哈希不符）自带可读说明
+    is IllegalStateException -> t.message?.takeIf { it.isNotBlank() } ?: "资产校验没通过"
+    else -> t.message?.trim()?.takeIf { it.isNotBlank() }
+        ?.let { if (it.length > 60) it.take(60) + "…" else it }
+        ?: "未知错误"
+}
+
 @Composable
 fun TryOnScreen(onBack: () -> Unit) {
 
@@ -112,11 +134,19 @@ fun TryOnScreen(onBack: () -> Unit) {
     // 当前生效的一套资源
     var active by remember { mutableStateOf<ActiveAssets?>(null) }
 
+    // 启动时落到内置素材的提示；远端同步成功后清空
+    var offlineNotice by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         runCatching { localRepository.loadActiveAssets() }
             .onSuccess {
                 localAssets = it
-                if (active == null) active = it
+                if (active == null) {
+                    active = it
+                    // 启动这一轮不自动连服务端，先如实说明用的是内置素材，
+                    // 免得用户看到一张陌生的人脸还不知道为什么
+                    offlineNotice = "当前使用手机内置素材。连上服务端后，点「拉取目录」可切换为服务端素材"
+                }
             }
             .onFailure { localError = it.message ?: "本地资产包读取失败" }
     }
@@ -133,10 +163,11 @@ fun TryOnScreen(onBack: () -> Unit) {
                 val assets = pkg.toActiveAssets()
                 remoteAssets = assets
                 active = assets
+                offlineNotice = null
                 syncStatus = "已加载远端目录 ${pkg.catalog.catalogVersion}"
             }.onFailure { t ->
                 // 失败：保留上一套资源与当前画面
-                syncError = t.message ?: t::class.simpleName ?: "未知错误"
+                syncError = readableSyncError(t)
                 syncStatus = null
             }
             syncing = false
@@ -164,6 +195,7 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncing = syncing,
                 syncStatus = syncStatus,
                 syncError = syncError,
+                offlineNotice = offlineNotice,
                 onRecommend = { scene, preference, onResult ->
                     scope.launch {
                         // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
@@ -196,6 +228,7 @@ private fun TryOnContent(
     syncing: Boolean,
     syncStatus: String?,
     syncError: String?,
+    offlineNotice: String?,
     onRecommend: (
         scene: String,
         preference: String,
@@ -310,6 +343,13 @@ private fun TryOnContent(
                     Text("远端同步失败：$it（已保留当前资源）",
                         color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(6.dp))
+                }
+                // 没有报错但用的是内置素材时，也要说清楚，别让用户以为是服务端的人
+                if (syncError == null) {
+                    offlineNotice?.let {
+                        Text(it, color = Color(0xFFFFD54F), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
                 syncStatus?.let {
                     Text(it, color = Color.White.copy(alpha = 0.85f),
