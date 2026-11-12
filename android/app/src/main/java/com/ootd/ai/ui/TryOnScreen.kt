@@ -1,17 +1,22 @@
 package com.ootd.ai.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,12 +33,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ootd.ai.BuildConfig
 import com.ootd.ai.data.ActiveAssets
+import com.ootd.ai.data.ApiException
 import com.ootd.ai.data.CatalogApi
 import com.ootd.ai.data.GarmentOption
 import com.ootd.ai.data.LocalAssetRepository
@@ -81,6 +90,27 @@ private fun rememberModelState(modelLoader: ModelLoader, path: String?): ModelLo
  * B03：在旁边加远端目录入口 —— 拉 /v1/catalog、下载整包、校验 size 与 sha256，
  *      整版通过才切换；再接 /v1/recommendations 驱动换衣，展示理由与模式。
  */
+/**
+ * 把底层异常翻译成用户能看懂的一句话。
+ *
+ * 直接展示 t.message 会把 okhttp 内部对象名（如 Address@eeea04995）铺满屏幕，
+ * 用户看不懂也帮不上忙。这里按类型分：网络类给中文结论，业务类保留服务端原话。
+ */
+private fun readableSyncError(t: Throwable): String = when (t) {
+    // 业务错误：服务端明确回了状态码，原话有信息量，保留
+    is ApiException -> t.message?.takeIf { it.isNotBlank() } ?: "服务端返回 HTTP ${t.code}"
+    is java.net.UnknownHostException -> "找不到服务端地址，请检查网络"
+    is java.net.ConnectException -> "连不上服务端"
+    is java.net.SocketTimeoutException -> "连接服务端超时"
+    is javax.net.ssl.SSLException -> "和服务端的安全连接建立失败"
+    is java.io.IOException -> "网络连接中断"
+    // 下载后的校验失败（缺文件、大小或哈希不符）自带可读说明
+    is IllegalStateException -> t.message?.takeIf { it.isNotBlank() } ?: "资产校验没通过"
+    else -> t.message?.trim()?.takeIf { it.isNotBlank() }
+        ?.let { if (it.length > 60) it.take(60) + "…" else it }
+        ?: "未知错误"
+}
+
 @Composable
 fun TryOnScreen(onBack: () -> Unit) {
 
@@ -104,11 +134,19 @@ fun TryOnScreen(onBack: () -> Unit) {
     // 当前生效的一套资源
     var active by remember { mutableStateOf<ActiveAssets?>(null) }
 
+    // 启动时落到内置素材的提示；远端同步成功后清空
+    var offlineNotice by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         runCatching { localRepository.loadActiveAssets() }
             .onSuccess {
                 localAssets = it
-                if (active == null) active = it
+                if (active == null) {
+                    active = it
+                    // 启动这一轮不自动连服务端，先如实说明用的是内置素材，
+                    // 免得用户看到一张陌生的人脸还不知道为什么
+                    offlineNotice = "当前使用手机内置素材。连上服务端后，点「拉取目录」可切换为服务端素材"
+                }
             }
             .onFailure { localError = it.message ?: "本地资产包读取失败" }
     }
@@ -125,10 +163,11 @@ fun TryOnScreen(onBack: () -> Unit) {
                 val assets = pkg.toActiveAssets()
                 remoteAssets = assets
                 active = assets
+                offlineNotice = null
                 syncStatus = "已加载远端目录 ${pkg.catalog.catalogVersion}"
             }.onFailure { t ->
                 // 失败：保留上一套资源与当前画面
-                syncError = t.message ?: t::class.simpleName ?: "未知错误"
+                syncError = readableSyncError(t)
                 syncStatus = null
             }
             syncing = false
@@ -156,6 +195,7 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncing = syncing,
                 syncStatus = syncStatus,
                 syncError = syncError,
+                offlineNotice = offlineNotice,
                 onRecommend = { scene, preference, onResult ->
                     scope.launch {
                         // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
@@ -188,6 +228,7 @@ private fun TryOnContent(
     syncing: Boolean,
     syncStatus: String?,
     syncError: String?,
+    offlineNotice: String?,
     onRecommend: (
         scene: String,
         preference: String,
@@ -271,8 +312,12 @@ private fun TryOnContent(
 
             OutlinedButton(
                 onClick = onBack,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
                 modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
-            ) { Text("返回") }
+            ) { Text("返回", fontSize = 13.sp) }
 
             // 顶部：当前资源来源（避开状态栏）
             Text(
@@ -290,13 +335,21 @@ private fun TryOnContent(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .padding(12.dp)
+                    .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 14.dp, vertical = 16.dp)
             ) {
                 syncError?.let {
                     Text("远端同步失败：$it（已保留当前资源）",
                         color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(6.dp))
+                }
+                // 没有报错但用的是内置素材时，也要说清楚，别让用户以为是服务端的人
+                if (syncError == null) {
+                    offlineNotice?.let {
+                        Text(it, color = Color(0xFFFFD54F), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
                 syncStatus?.let {
                     Text(it, color = Color.White.copy(alpha = 0.85f),
@@ -355,8 +408,21 @@ private fun TryOnContent(
                                 }
                             }
                         },
-                        enabled = !recommending
-                    ) { Text(if (recommending) "…" else "推荐") }
+                        enabled = !recommending,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        modifier = Modifier.height(56.dp)
+                    ) {
+                        if (recommending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Text("推荐", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
 
                 recommendation?.let { r ->
@@ -376,14 +442,22 @@ private fun TryOnContent(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     garments.forEach { g ->
                         val isCurrent = g.assetId == appliedGarmentId
-                        val buttonModifier = Modifier.weight(1f)
+                        val buttonModifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
                         if (isCurrent) {
-                            Button(onClick = { }, modifier = buttonModifier) {
-                                Text(g.label, maxLines = 1)
+                            Button(
+                                onClick = { },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp),
+                                modifier = buttonModifier
+                            ) {
+                                Text(g.label, maxLines = 1, fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold)
                             }
                         } else {
                             OutlinedButton(
@@ -392,14 +466,26 @@ private fun TryOnContent(
                                     rollbackGuard = false
                                     requestedGarmentId = g.assetId
                                 },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White.copy(alpha = 0.92f)),
+                                contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
-                            ) { Text(g.label, maxLines = 1) }
+                            ) { Text(g.label, maxLines = 1, fontSize = 12.sp) }
                         }
                     }
                     OutlinedButton(
                         onClick = if (syncing) ({}) else onSyncRemote,
-                        modifier = Modifier.weight(1.1f)
-                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1) }
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White.copy(alpha = 0.92f)),
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .height(46.dp)
+                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1, fontSize = 12.sp) }
                 }
             }
         }
@@ -458,8 +544,18 @@ private fun FailedCard(
             )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("重试") }
-                OutlinedButton(onClick = onBack) { Text("返回") }
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("重试", fontSize = 14.sp) }
+                OutlinedButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("返回", fontSize = 14.sp) }
             }
         }
     }
@@ -485,8 +581,16 @@ private fun ManifestError(
             )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("拉取服务端目录") }
-                OutlinedButton(onClick = onBack) { Text("返回") }
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("拉取服务端目录", fontSize = 14.sp) }
+                OutlinedButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("返回", fontSize = 14.sp) }
             }
         }
     }
