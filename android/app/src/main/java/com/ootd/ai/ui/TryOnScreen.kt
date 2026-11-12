@@ -1,17 +1,22 @@
 package com.ootd.ai.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,10 +33,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ootd.ai.BuildConfig
 import com.ootd.ai.data.ActiveAssets
 import com.ootd.ai.data.CatalogApi
@@ -271,8 +279,12 @@ private fun TryOnContent(
 
             OutlinedButton(
                 onClick = onBack,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
                 modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
-            ) { Text("返回") }
+            ) { Text("返回", fontSize = 13.sp) }
 
             // 顶部：当前资源来源（避开状态栏）
             Text(
@@ -290,8 +302,9 @@ private fun TryOnContent(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .padding(12.dp)
+                    .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 14.dp, vertical = 16.dp)
             ) {
                 syncError?.let {
                     Text("远端同步失败：$it（已保留当前资源）",
@@ -355,8 +368,21 @@ private fun TryOnContent(
                                 }
                             }
                         },
-                        enabled = !recommending
-                    ) { Text(if (recommending) "…" else "推荐") }
+                        enabled = !recommending,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        modifier = Modifier.height(56.dp)
+                    ) {
+                        if (recommending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Text("推荐", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
 
                 recommendation?.let { r ->
@@ -376,14 +402,22 @@ private fun TryOnContent(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     garments.forEach { g ->
                         val isCurrent = g.assetId == appliedGarmentId
-                        val buttonModifier = Modifier.weight(1f)
+                        val buttonModifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
                         if (isCurrent) {
-                            Button(onClick = { }, modifier = buttonModifier) {
-                                Text(g.label, maxLines = 1)
+                            Button(
+                                onClick = { },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp),
+                                modifier = buttonModifier
+                            ) {
+                                Text(g.label, maxLines = 1, fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold)
                             }
                         } else {
                             OutlinedButton(
@@ -392,14 +426,26 @@ private fun TryOnContent(
                                     rollbackGuard = false
                                     requestedGarmentId = g.assetId
                                 },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White.copy(alpha = 0.92f)),
+                                contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
-                            ) { Text(g.label, maxLines = 1) }
+                            ) { Text(g.label, maxLines = 1, fontSize = 12.sp) }
                         }
                     }
                     OutlinedButton(
                         onClick = if (syncing) ({}) else onSyncRemote,
-                        modifier = Modifier.weight(1.1f)
-                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1) }
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White.copy(alpha = 0.92f)),
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .height(46.dp)
+                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1, fontSize = 12.sp) }
                 }
             }
         }
@@ -458,8 +504,18 @@ private fun FailedCard(
             )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("重试") }
-                OutlinedButton(onClick = onBack) { Text("返回") }
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("重试", fontSize = 14.sp) }
+                OutlinedButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("返回", fontSize = 14.sp) }
             }
         }
     }
@@ -485,8 +541,16 @@ private fun ManifestError(
             )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("拉取服务端目录") }
-                OutlinedButton(onClick = onBack) { Text("返回") }
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("拉取服务端目录", fontSize = 14.sp) }
+                OutlinedButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(46.dp)
+                ) { Text("返回", fontSize = 14.sp) }
             }
         }
     }
