@@ -10,6 +10,7 @@
 | tune_shape_pixie.py | 全身照片、身高、扫描参数 | 同尺度截面测量及体型候选 |
 | export_person_asset.py | 人物 GLB、可选身高 | 脚底归零的 GLB 和变换记录 |
 | project_face_color.py | 固定人物、正面近照 | 顶点着色 GLB、近景对照；顶点与三角面保持一致 |
+| build_person_look.py | 已着色人物 GLB | 外观候选 GLB（身体改色 + 近似头发层）、参数与回读检查记录 |
 | build_tryon_fixture.py | 固定 T 姿势人物 | 两件合成测试短袖及 manifest |
 | preview_person_asset.py | 一或两件人物资产 | 同尺度正侧背面图片 |
 | preview_tryon.py | 完整资产包 | 可旋转和换衣的 Tk 窗口，或三视图图片 |
@@ -45,6 +46,14 @@ $env:OOTD_PIXIE_ROOT = 'C:\your-licensed-model-directory'
 ```
 
 体型脚本默认以基线腰部截面缩窄 8% 作为试验目标，使用同一身高比较候选。该数值用于试验筛选，本人确认后才作为衣物适配基准。面部脚本将近照颜色投影到网格，侧后部使用近似肤色，头发几何需继续制作。
+
+外观候选脚本 `build_person_look.py` 在已确认体型上只改颜色并追加一层独立头发网格：头部顶点色保持原样，颈部以下改为由面部前方顶点推导的肤色，大腿段用颜色近似固定下装（不新增几何）；头发是冠顶与后脑外推的人工近似外壳，没有照片参照。脚本导出后重新读入 GLB，逐项核对身体几何未变、头部顶点色未变、头发前缘与下缘不越界，任一项不符即报错。本机 2026-11-10 生成过一版候选：身体改色 5,114 顶点、短裤段 565 顶点、头部 4,796 顶点未变，头发 2,531 顶点 / 4,625 三角面。该版头发观感未达写实要求，只作对照，不作为交付外观。
+
+```powershell
+& $modelPython .\reconstruction\build_person_look.py --person .\outputs\person-aligned\person-001.glb --output-dir .\outputs\person-look-02 --pixie-dir $env:OOTD_PIXIE_ROOT
+```
+
+`--output-dir` 必须是不存在的新目录，脚本不会覆盖已有实验结果。
 
 ### 包和预览
 
