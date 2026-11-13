@@ -1,0 +1,128 @@
+{
+  "ok": true,
+  "tool_version": "0.1.0",
+  "input_dir": "D:\\Desktop\\软创\\local-data\\handoff\\T02-candidate-20261113",
+  "errors": [],
+  "warnings": [],
+  "manifest": {
+    "schema_version": 1,
+    "person_id": "person-001",
+    "catalog_version": "fixture-face-03",
+    "pose_id": "pose-001",
+    "assets": [
+      {
+        "asset_type": "person",
+        "asset_id": "person-001",
+        "relative_file": "person-001.glb",
+        "source": "fixture-face-01"
+      },
+      {
+        "asset_type": "garment",
+        "asset_id": "top-001",
+        "relative_file": "top-001_v2.glb",
+        "source": "real-garment-reconstruction",
+        "display_name": "浅色印花短袖",
+        "available": true,
+        "tags": [
+          "white",
+          "casual",
+          "print"
+        ]
+      },
+      {
+        "asset_type": "garment",
+        "asset_id": "top-002",
+        "relative_file": "top-002_v1.glb",
+        "source": "real-garment-reconstruction",
+        "display_name": "深蓝翻领 POLO",
+        "available": true,
+        "tags": [
+          "blue",
+          "dark",
+          "polo",
+          "casual"
+        ]
+      }
+    ]
+  },
+  "assets": [
+    {
+      "index": 0,
+      "asset_id": "person-001",
+      "asset_type": "person",
+      "relative_file": "person-001.glb",
+      "errors": [],
+      "warnings": [],
+      "size_bytes": 419572,
+      "sha256": "f3dbe4c875dafb73d161d28de311b33dd839e8ec2fb559624c129a3a66012354",
+      "vertices": 10475,
+      "triangles": 20908,
+      "bounds": [
+        [
+          -0.8919596076011658,
+          0.0,
+          -0.19426734745502472
+        ],
+        [
+          0.8919665813446045,
+          1.809999942779541,
+          0.09449730068445206
+        ]
+      ]
+    },
+    {
+      "index": 1,
+      "asset_id": "top-001",
+      "asset_type": "garment",
+      "relative_file": "top-001_v2.glb",
+      "errors": [],
+      "warnings": [],
+      "size_bytes": 981688,
+      "sha256": "64bca93f973f195672008d1a4149a3aba1a6d042f3319a826b48c85d4fc7a6fe",
+      "vertices": 6369,
+      "triangles": 10692,
+      "bounds": [
+        [
+          -0.400402307510376,
+          0.7749999761581421,
+          -0.20979037880897522
+        ],
+        [
+          0.4004024863243103,
+          1.5448362827301025,
+          0.0923057273030281
+        ]
+      ]
+    },
+    {
+      "index": 2,
+      "asset_id": "top-002",
+      "asset_type": "garment",
+      "relative_file": "top-002_v1.glb",
+      "errors": [],
+      "warnings": [],
+      "size_bytes": 672096,
+      "sha256": "ceda31dc18e2ee2140eb5ea28d3400506a30f38d10e629c74fd2863f27942bcc",
+      "vertices": 6503,
+      "triangles": 12616,
+      "bounds": [
+        [
+          -0.4054209589958191,
+          0.8009999990463257,
+          -0.21020233631134033
+        ],
+        [
+          0.4054223895072937,
+          1.5743367671966553,
+          0.0923057273030281
+        ]
+      ]
+    }
+  ],
+  "manual_checks": [
+    "本人相似度：需本人确认面部、头身比与体形能对应本人输入",
+    "尺寸真实性：需真实身高数据对照；工具只报告异常范围",
+    "穿模与贴合：需人物与两件上衣在同一场景做正/侧/背面检查"
+  ],
+  "exit_code": 0
+}

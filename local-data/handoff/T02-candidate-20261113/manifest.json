@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "person_id": "person-001",
+  "catalog_version": "fixture-face-03",
+  "pose_id": "pose-001",
+  "assets": [
+    {
+      "asset_type": "person",
+      "asset_id": "person-001",
+      "relative_file": "person-001.glb",
+      "source": "fixture-face-01"
+    },
+    {
+      "asset_type": "garment",
+      "asset_id": "top-001",
+      "relative_file": "top-001_v2.glb",
+      "source": "real-garment-reconstruction",
+      "display_name": "浅色印花短袖",
+      "available": true,
+      "tags": [
+        "white",
+        "casual",
+        "print"
+      ]
+    },
+    {
+      "asset_type": "garment",
+      "asset_id": "top-002",
+      "relative_file": "top-002_v1.glb",
+      "source": "real-garment-reconstruction",
+      "display_name": "深蓝翻领 POLO",
+      "available": true,
+      "tags": [
+        "blue",
+        "dark",
+        "polo",
+        "casual"
+      ]
+    }
+  ]
+}
