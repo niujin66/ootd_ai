@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -137,6 +138,10 @@ fun TryOnScreen(onBack: () -> Unit) {
     // 启动时落到内置素材的提示；远端同步成功后清空
     var offlineNotice by remember { mutableStateOf<String?>(null) }
 
+    // R01：操作序号。手动换衣、切换目录都会让它 +1；
+    // 在途的推荐响应回来后序号对不上就整条丢弃，不许改写当前画面。
+    val operationSeq = remember { mutableIntStateOf(0) }
+
     LaunchedEffect(Unit) {
         runCatching { localRepository.loadActiveAssets() }
             .onSuccess {
@@ -164,6 +169,8 @@ fun TryOnScreen(onBack: () -> Unit) {
                 remoteAssets = assets
                 active = assets
                 offlineNotice = null
+                // R01：目录换了，之前发出去的推荐一律作废，避免旧目录的结果落到新画面上
+                operationSeq.intValue++
                 syncStatus = "已加载远端目录 ${pkg.catalog.catalogVersion}"
             }.onFailure { t ->
                 // 失败：保留上一套资源与当前画面
@@ -190,20 +197,21 @@ fun TryOnScreen(onBack: () -> Unit) {
 
             else -> TryOnContent(
                 assets = current,
+                operationSeq = operationSeq,
                 onBack = onBack,
                 onSyncRemote = { syncRemote() },
                 syncing = syncing,
                 syncStatus = syncStatus,
                 syncError = syncError,
                 offlineNotice = offlineNotice,
-                onRecommend = { scene, preference, onResult ->
+                onRecommend = { requestId, scene, preference, onResult ->
                     scope.launch {
                         // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
                         val outcome = withContext(Dispatchers.IO) {
                             runCatching {
                                 api.recommend(
                                     RecommendationRequest(
-                                        requestId = "req-" + System.currentTimeMillis(),
+                                        requestId = requestId,
                                         personId = current.personId,
                                         catalogVersion = current.catalogVersion,
                                         scene = scene,
@@ -223,6 +231,7 @@ fun TryOnScreen(onBack: () -> Unit) {
 @Composable
 private fun TryOnContent(
     assets: ActiveAssets,
+    operationSeq: MutableIntState,
     onBack: () -> Unit,
     onSyncRemote: () -> Unit,
     syncing: Boolean,
@@ -230,6 +239,7 @@ private fun TryOnContent(
     syncError: String?,
     offlineNotice: String?,
     onRecommend: (
+        requestId: String,
         scene: String,
         preference: String,
         onResult: (Result<com.ootd.ai.data.RecommendationResult>) -> Unit
@@ -384,11 +394,33 @@ private fun TryOnContent(
                     )
                     Button(
                         onClick = {
+                            // R01：发请求前把序号与目录版本钉下来，回来时对不上就整条丢弃
+                            val seqAtStart = operationSeq.intValue
+                            val versionAtStart = assets.catalogVersion
+                            val requestId = "req-" + java.util.UUID.randomUUID().toString().take(8)
                             recommending = true
                             recommendationError = null
-                            onRecommend(sceneText, preferenceText) { result ->
+                            onRecommend(requestId, sceneText, preferenceText) { result ->
                                 recommending = false
+                                // 期间手动换过衣、或切过目录 —— 这条结果已经失效
+                                if (seqAtStart != operationSeq.intValue) {
+                                    recommendationError =
+                                        "这条推荐回来晚了（期间换过衣或目录），已忽略"
+                                    return@onRecommend
+                                }
                                 result.onSuccess { r ->
+                                    // 服务端回显了 request_id 就核对一遍，没回显则靠上面的序号兜底
+                                    if (r.requestId.isNotBlank() && r.requestId != requestId) {
+                                        recommendationError = "收到一条不匹配的推荐结果，已忽略"
+                                        return@onSuccess
+                                    }
+                                    if (r.catalogVersion.isNotBlank() &&
+                                        r.catalogVersion != versionAtStart
+                                    ) {
+                                        recommendationError =
+                                            "推荐基于目录 ${r.catalogVersion}，当前已是 $versionAtStart，已忽略"
+                                        return@onSuccess
+                                    }
                                     recommendation = r
                                     if (r.isNoMatch) {
                                         recommendationError = r.reason.ifBlank { "没有合适的衣物" }
@@ -462,6 +494,8 @@ private fun TryOnContent(
                         } else {
                             OutlinedButton(
                                 onClick = {
+                                    // R01：手动换衣立刻作废在途的推荐，避免响应回来又把你选的换回去
+                                    operationSeq.intValue++
                                     garmentError = null
                                     rollbackGuard = false
                                     requestedGarmentId = g.assetId
