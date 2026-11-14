@@ -268,6 +268,9 @@ private fun TryOnContent(
     key(assets, sceneRetry) {
         val personState = rememberModelState(modelLoader, assets.personPath)
         val garmentState = rememberModelState(modelLoader, requested?.path)
+        // R02：记住已生效衣物的模型实例。切衣加载期间继续显示它，避免画面空档；
+        // 候选解码失败时也靠它保住当前衣物，人物与镜头不受影响。
+        var appliedGarmentState by remember { mutableStateOf<ModelLoadState?>(null) }
 
         LaunchedEffect(garmentState, requestedGarmentId) {
             if (rollbackGuard) return@LaunchedEffect
@@ -275,6 +278,7 @@ private fun TryOnContent(
                 is ModelLoadState.Ready -> {
                     garmentError = null
                     appliedGarmentId = requestedGarmentId
+                    appliedGarmentState = state
                 }
 
                 is ModelLoadState.Failed -> {
@@ -304,7 +308,10 @@ private fun TryOnContent(
                 modelLoader = modelLoader
             ) {
                 (personState as? ModelLoadState.Ready)?.let { ModelNode(modelInstance = it.instance) }
-                (garmentState as? ModelLoadState.Ready)?.let { ModelNode(modelInstance = it.instance) }
+                // R02：新衣 Ready 才换上去；还在加载或已失败，就继续显示上一件生效的衣物
+                val shownGarment = (garmentState as? ModelLoadState.Ready)
+                    ?: (appliedGarmentState as? ModelLoadState.Ready)
+                shownGarment?.let { ModelNode(modelInstance = it.instance) }
             }
 
             if (personState is ModelLoadState.Loading || personState == null) {
