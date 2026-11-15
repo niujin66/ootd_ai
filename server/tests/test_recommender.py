@@ -120,6 +120,21 @@ class PromptAndValidationTests(unittest.TestCase):
         ok, result = validate_model_output(json.dumps({"garment_id": "top-001"}), IDS)
         self.assertFalse(ok)
 
+    def test_validate_missing_garment_id_key_fails(self):
+        # R06：缺 garment_id 键是协议错误，不能当成 no_match。
+        ok, result = validate_model_output(json.dumps({"reason": "没有 ID 键"}), IDS)
+        self.assertFalse(ok)
+        self.assertIn("garment_id", result["error"])
+
+    def test_validate_wrong_type_garment_id_fails(self):
+        ok, result = validate_model_output(json.dumps({"garment_id": 123, "reason": "数字 ID"}), IDS)
+        self.assertFalse(ok)
+        self.assertIn("类型", result["error"])
+
+    def test_validate_null_with_empty_reason_fails(self):
+        ok, result = validate_model_output(json.dumps({"garment_id": None, "reason": "   "}), IDS)
+        self.assertFalse(ok)
+
     def test_validate_extra_keys_tolerated(self):
         ok, result = validate_model_output(
             json.dumps({"garment_id": "top-002", "reason": "深色", "confidence": 0.9}), IDS
@@ -147,6 +162,28 @@ class PromptAndValidationTests(unittest.TestCase):
         # old stamps fall out of the window
         stamps[:] = [time.time() - 120]
         check_minute_cap(stamps, time.time(), cap=2)
+
+    def test_default_timeout_is_shorter_than_client(self):
+        # R10：服务端默认 12s，必须短于 Android 的 20s 读超时。
+        recommender = AIModelRecommender(base_url="http://x", api_key="k", model="m")
+        self.assertEqual(recommender.timeout_seconds, 12.0)
+        self.assertLess(recommender.timeout_seconds, 20.0)
+
+    def test_daily_cap_reservation_visible_across_connections(self):
+        # R10：占用额度写进数据库，另一个连接立刻能看到，临界额度不超用。
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.db"
+            conn1 = db.connect(path)
+            db.init_db(conn1)
+            conn2 = db.connect(path)
+            db.init_db(conn2)
+            try:
+                check_daily_cap(conn1, "2026-11-09", cap=1)
+                with self.assertRaises(Exception):
+                    check_daily_cap(conn2, "2026-11-09", cap=1)
+            finally:
+                conn1.close()
+                conn2.close()
 
 
 class ModelCallTests(unittest.TestCase):
@@ -271,6 +308,50 @@ class AiEndpointTests(ServerTestCase):
         response = self.recommend("浅色")
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["error"]["code"], "bad_gateway")
+
+    def test_ai_missing_garment_id_key_returns_502(self):
+        # R06：模型输出缺 garment_id 键必须报协议错误（502），不是 no_match。
+        self.recommender = make_recommender(
+            content=json.dumps({"reason": "忘了给 ID"})
+        )
+        self.app = create_app(
+            db_path=self.db_path, assets_root=self.assets_root, recommender=self.recommender
+        )
+        self.client = TestClient(self.app)
+        response = self.recommend("浅色")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["error"]["code"], "bad_gateway")
+
+    def test_ai_wrong_type_garment_id_returns_502(self):
+        self.recommender = make_recommender(
+            content=json.dumps({"garment_id": 123, "reason": "数字 ID"})
+        )
+        self.app = create_app(
+            db_path=self.db_path, assets_root=self.assets_root, recommender=self.recommender
+        )
+        self.client = TestClient(self.app)
+        response = self.recommend("浅色")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["error"]["code"], "bad_gateway")
+
+    def test_ai_timeout_logs_failure_with_latency(self):
+        # R10：超时也要落一条日志，带 status=timeout 和耗时。
+        def timeout_handler(request):
+            raise httpx.ConnectTimeout("timed out")
+
+        self.recommender = make_recommender(transport=httpx.MockTransport(timeout_handler))
+        self.app = create_app(
+            db_path=self.db_path, assets_root=self.assets_root, recommender=self.recommender
+        )
+        self.client = TestClient(self.app)
+        response = self.recommend("浅色")
+        self.assertEqual(response.status_code, 503)
+        lines = self.call_log.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        entry = json.loads(lines[0])
+        self.assertEqual(entry["status"], "timeout")
+        self.assertIsNone(entry["garment_id"])
+        self.assertIn("latency_seconds", entry)
 
     def test_ai_disabled_garment_is_rejected_502(self):
         manifest = valid_manifest()

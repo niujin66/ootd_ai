@@ -80,6 +80,20 @@ def _request_id(request: Request) -> str | None:
     return request.headers.get("x-request-id")
 
 
+def _log_entry(request_id: str, status: str, garment_id, reason, latency_seconds, usage=None) -> dict:
+    """R10：成功和失败都记一条调用日志，统一字段，含耗时。"""
+    return {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "mode": "ai",
+        "status": status,
+        "garment_id": garment_id,
+        "reason": reason,
+        "request_id": request_id,
+        "latency_seconds": latency_seconds,
+        "usage": usage,
+    }
+
+
 # ---------------- explicit mock recommender (mode=mock) ----------------
 
 WHITE_KEYWORDS = ("浅", "白", "亮")
@@ -257,12 +271,31 @@ def create_app(
                     minute_cap = int(os.environ.get("OOTD_AI_MAX_CALLS_PER_MINUTE", "30"))
                     check_daily_cap(conn, time.strftime("%Y-%m-%d"), daily_cap)
                     check_minute_cap(minute_window, time.time(), minute_cap)
+                    started = time.perf_counter()
                     call = engine.recommend(candidates, body.scene, body.preference)
                 except RecommenderTimeoutError as exc:
+                    append_call_log(
+                        _log_entry(
+                            body.request_id, "timeout", None, str(exc),
+                            round(time.perf_counter() - started, 4),
+                        )
+                    )
                     raise HTTPException(503, f"推荐超时：{exc}")
                 except RecommenderUpstreamError as exc:
+                    append_call_log(
+                        _log_entry(
+                            body.request_id, "upstream_error", None, str(exc),
+                            round(time.perf_counter() - started, 4),
+                        )
+                    )
                     raise HTTPException(503, f"模型服务不可用：{exc}")
                 except InvalidModelOutputError as exc:
+                    append_call_log(
+                        _log_entry(
+                            body.request_id, "invalid_output", None, str(exc),
+                            round(time.perf_counter() - started, 4),
+                        )
+                    )
                     raise HTTPException(502, f"模型输出校验失败：{exc}")
                 except RateLimitError as exc:
                     raise HTTPException(503, str(exc))
@@ -271,16 +304,10 @@ def create_app(
                 status, garment_id, reason = call.status, call.garment_id, call.reason
                 response_mode = "ai"
                 append_call_log(
-                    {
-                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "mode": "ai",
-                        "status": status,
-                        "garment_id": garment_id,
-                        "reason": reason,
-                        "request_id": body.request_id,
-                        "latency_seconds": call.latency_seconds,
-                        "usage": call.usage,
-                    }
+                    _log_entry(
+                        body.request_id, status, garment_id, reason,
+                        call.latency_seconds, call.usage,
+                    )
                 )
             else:
                 raise HTTPException(503, f"未知 OOTD_AI_MODE：{mode}")
