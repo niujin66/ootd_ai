@@ -143,6 +143,19 @@ fun TryOnScreen(onBack: () -> Unit) {
     val operationSeq = remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
+        // R04：先试离线冷启动恢复。走本地文件，不发任何网络请求，
+        // 飞行模式下也能把上次生效的素材还原出来。
+        val restored = runCatching { remoteRepository.restoreLast() }.getOrNull()
+        if (restored != null) {
+            val assets = restored.toActiveAssets()
+            remoteAssets = assets
+            active = assets
+            offlineNotice =
+                "已从本机恢复上次生效的素材（${restored.catalog.catalogVersion}）。点「拉取目录」可检查更新"
+            return@LaunchedEffect
+        }
+
+        // 没有可恢复的远端包，退回内置素材
         runCatching { localRepository.loadActiveAssets() }
             .onSuccess {
                 localAssets = it
