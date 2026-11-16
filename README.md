@@ -24,6 +24,7 @@
 
 - [当前任务卡](docs/first-week.md)写明 A、B、C 和队长的负责人、截止时间、输入、交付与验收。
 - [技术状态和运行入口](docs/technical-notes.md)说明实际完成范围。
+- [头部贴图流水线](docs/head-texture-pipeline.md)记录扫描网格的 UV、烘焙、验收与复用。
 - [整体架构](docs/architecture.md)统一资产和接口。
 - [方法调研](docs/method-research.md)比较头部重建、实衣制作与 Gemini 建议，并规定实验继续条件。
 - [实施与验证清单](docs/implementation-plan.md)列出代码缺口、A/B/C 任务与待执行用例。
