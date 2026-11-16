@@ -20,6 +20,7 @@
 
 - [当前任务卡](docs/first-week.md)写明 A、B、C 和队长的负责人、截止时间、输入、交付与验收。
 - [技术状态和运行入口](docs/technical-notes.md)说明实际完成范围。
+- [头部贴图流水线](docs/head-texture-pipeline.md)记录扫描网格的 UV、烘焙、验收与复用。
 - [整体架构](docs/architecture.md)统一资产和接口。
 - [统一规范](docs/team-standards.md)规定版本、交接、分支及 AI 编程记录。
 - [Android](android/README.md)、[后端](server/README.md)、[人物与本地预览工具](reconstruction/README.md)分别提供运行步骤。
