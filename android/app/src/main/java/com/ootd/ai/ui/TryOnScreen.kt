@@ -48,6 +48,7 @@ import com.ootd.ai.data.CatalogApi
 import com.ootd.ai.data.GarmentOption
 import com.ootd.ai.data.LocalAssetRepository
 import com.ootd.ai.data.RecommendationRequest
+import com.ootd.ai.data.RemotePackage
 import com.ootd.ai.data.RemotePackageRepository
 import com.ootd.ai.data.toActiveAssets
 import io.github.sceneview.ModelLoadState
@@ -138,6 +139,14 @@ fun TryOnScreen(onBack: () -> Unit) {
     // 启动时落到内置素材的提示；远端同步成功后清空
     var offlineNotice by remember { mutableStateOf<String?>(null) }
 
+    // E04：刚同步下来、还没确认上屏的包。上屏成功后才把它记成生效版本，
+    // 否则一个「哈希对但解不开」的包会被记成生效版本，下次冷启动继续恢复它。
+    var publishPending by remember { mutableStateOf<RemotePackage?>(null) }
+
+    // E04：当前画面是不是「从本机恢复出来的」那一套。
+    // 恢复出来的包如果解码失败，要允许退一次内置素材，不能把人晾在坏画面上。
+    var usingRestored by remember { mutableStateOf(false) }
+
     // R01：操作序号。手动换衣、切换目录都会让它 +1；
     // 在途的推荐响应回来后序号对不上就整条丢弃，不许改写当前画面。
     val operationSeq = remember { mutableIntStateOf(0) }
@@ -150,6 +159,7 @@ fun TryOnScreen(onBack: () -> Unit) {
             val assets = restored.toActiveAssets()
             remoteAssets = assets
             active = assets
+            usingRestored = true
             offlineNotice =
                 "已从本机恢复上次生效的素材（${restored.catalog.catalogVersion}）。点「拉取目录」可检查更新"
             return@LaunchedEffect
@@ -181,7 +191,10 @@ fun TryOnScreen(onBack: () -> Unit) {
                 val assets = pkg.toActiveAssets()
                 remoteAssets = assets
                 active = assets
+                usingRestored = false
                 offlineNotice = null
+                // E04：先挂起「待确认」，等这一版真的上屏（人物 Ready）再落生效指针
+                publishPending = pkg
                 // R01：目录换了，之前发出去的推荐一律作废，避免旧目录的结果落到新画面上
                 operationSeq.intValue++
                 syncStatus = "已加载远端目录 ${pkg.catalog.catalogVersion}"
@@ -191,6 +204,35 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncStatus = null
             }
             syncing = false
+        }
+    }
+
+    /** E04：这一版真的画出来了，才承认它是生效版本。重复调用无副作用。 */
+    fun confirmVisible() {
+        val pkg = publishPending ?: return
+        publishPending = null
+        scope.launch { runCatching { remoteRepository.publishActive(pkg) } }
+    }
+
+    /**
+     * E04 复核意见第 2 条：恢复出来的包解不开时退回内置素材。
+     *
+     * 只在「这一套是从本机恢复的」时才退 —— 本来就在用内置素材还失败，再退一次
+     * 只会变成死循环。退之前先把远端那套摘掉，免得界面继续显示它的版本号。
+     */
+    fun fallbackToLocal() {
+        if (!usingRestored) return
+        usingRestored = false
+        scope.launch {
+            runCatching { localRepository.loadActiveAssets() }
+                .onSuccess { local ->
+                    localAssets = local
+                    remoteAssets = null
+                    publishPending = null
+                    active = local
+                    offlineNotice = "上次的素材打不开，已退回手机内置素材。点「拉取目录」可重新下载"
+                }
+                .onFailure { localError = it.message ?: "本地资产包读取失败" }
         }
     }
 
@@ -217,6 +259,8 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncStatus = syncStatus,
                 syncError = syncError,
                 offlineNotice = offlineNotice,
+                onPersonReady = { confirmVisible() },
+                onPersonFailed = { fallbackToLocal() },
                 onRecommend = { requestId, scene, preference, onResult ->
                     scope.launch {
                         // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
@@ -251,6 +295,10 @@ private fun TryOnContent(
     syncStatus: String?,
     syncError: String?,
     offlineNotice: String?,
+    /** E04：人物真的画上屏了 —— 只有这时候才承认这一版资源生效。 */
+    onPersonReady: () -> Unit,
+    /** E04：人物解不开 —— 由上层决定要不要退回内置素材。 */
+    onPersonFailed: () -> Unit,
     onRecommend: (
         requestId: String,
         scene: String,
@@ -284,6 +332,17 @@ private fun TryOnContent(
         // R02：记住已生效衣物的模型实例。切衣加载期间继续显示它，避免画面空档；
         // 候选解码失败时也靠它保住当前衣物，人物与镜头不受影响。
         var appliedGarmentState by remember { mutableStateOf<ModelLoadState?>(null) }
+
+        // E04：人物的实际加载结果决定这一版资源算不算生效。
+        // 结构探测能挡住大部分坏包，但真正的判据是 Filament 能不能把它画出来 ——
+        // Ready 了才落生效指针，Failed 了给上层一次退回内置素材的机会。
+        LaunchedEffect(personState) {
+            when (personState) {
+                is ModelLoadState.Ready -> onPersonReady()
+                is ModelLoadState.Failed -> onPersonFailed()
+                else -> Unit
+            }
+        }
 
         LaunchedEffect(garmentState, requestedGarmentId) {
             if (rollbackGuard) return@LaunchedEffect

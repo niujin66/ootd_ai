@@ -45,14 +45,28 @@ class PersistentCatalogStore(context: Context) {
             ?: emptyList()
     }
 
-    /** 某个人物下已下载的版本目录，按修改时间从新到旧。 */
+    /**
+     * 某个人物下已下载的版本目录，按「保存时间」从新到旧。
+     *
+     * E04 复核意见第 3 条：原来按目录 mtime 排。跨目录 rename（sync 里先写 staging
+     * 再改名过去）之后，mtime 反映的是改名那一刻而不是真正的下载完成时间，排序会错。
+     * manifest 里本来就存了 `saved_at`，按它排才可靠；读不到 saved_at 的目录排到最后
+     * —— 它多半也恢复不了，排前面只是多一次白试。
+     */
     fun versionsOf(personId: String): List<File> {
         val dir = File(root, personId)
         if (!dir.isDirectory) return emptyList()
         return dir.listFiles()
             ?.filter { it.isDirectory && !it.name.contains(".tmp-") && !it.name.endsWith(".lck") }
-            ?.sortedByDescending { it.lastModified() }
+            ?.sortedByDescending { readSavedAt(personId, it.name) }
             ?: emptyList()
+    }
+
+    /** 这一版是什么时候保存的；快照缺失或读不出来就返回 0。 */
+    fun readSavedAt(personId: String, catalogVersion: String): Long {
+        val file = File(versionDir(personId, catalogVersion), MANIFEST_FILE)
+        if (!file.isFile) return 0L
+        return runCatching { JSONObject(file.readText()).optLong("saved_at", 0L) }.getOrDefault(0L)
     }
 
     /** 版本目录。 */

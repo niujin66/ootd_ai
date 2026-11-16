@@ -67,6 +67,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.sceneview)
     testImplementation(libs.junit)
+    // GlbProbe 在单元测试里要真解析 JSON；Android 的 org.json 只是抛 not-mocked 的桩，
+    // 跑 JVM 测试必须换成真实实现。只在测试源集里加，不进 APK。
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
