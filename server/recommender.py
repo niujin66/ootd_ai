@@ -86,30 +86,40 @@ def validate_model_output(text: str, candidate_ids: set[str]) -> tuple[bool, dic
         return False, {"error": "模型输出不是合法 JSON"}
     if not isinstance(data, dict):
         return False, {"error": "模型输出必须是 JSON 对象"}
-    garment_id = data.get("garment_id")
+    # R06：garment_id 键必须显式存在；缺键按协议错误处理，不能滑成 no_match。
+    if "garment_id" not in data:
+        return False, {"error": "模型输出缺少 garment_id 字段"}
     reason = data.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         return False, {"error": "模型输出缺少非空的 reason"}
+    garment_id = data["garment_id"]
     if garment_id is None:
         return True, {"status": "no_match", "garment_id": None, "reason": reason.strip()}
-    if isinstance(garment_id, str) and garment_id in candidate_ids:
-        return True, {"status": "ok", "garment_id": garment_id, "reason": reason.strip()}
-    return False, {"error": f"模型返回未知或不可用的衣物 ID：{garment_id!r}"}
+    if not isinstance(garment_id, str):
+        return False, {"error": f"模型输出的 garment_id 类型错误：{garment_id!r}"}
+    if garment_id not in candidate_ids:
+        return False, {"error": f"模型返回未知或不可用的衣物 ID：{garment_id!r}"}
+    return True, {"status": "ok", "garment_id": garment_id, "reason": reason.strip()}
 
 
 def check_daily_cap(conn, day: str, cap: int) -> None:
-    """Count a call against the daily cap (persisted in SQLite)."""
+    """Atomically reserve one slot against the daily cap (persisted in SQLite).
+
+    R10：检查与增加合并成一条 INSERT..ON CONFLICT..RETURNING 语句，正式调用前先占额度，
+    避免两个请求都读到同一个剩余量、然后双双越过上限。超限的这次占用会回退，被拒绝的
+    请求不消耗额度。这条边界只在单进程内串行（SQLite 单写者）；跨进程串行不在演示范围内。
+    """
     row = conn.execute(
-        "SELECT calls FROM recommender_usage WHERE day=?", (day,)
-    ).fetchone()
-    calls = row["calls"] if row else 0
-    if calls >= cap:
-        raise RateLimitError(f"当日 AI 调用已达上限 {cap} 次")
-    conn.execute(
         "INSERT INTO recommender_usage (day, calls) VALUES (?, 1) "
-        "ON CONFLICT(day) DO UPDATE SET calls = calls + 1",
+        "ON CONFLICT(day) DO UPDATE SET calls = calls + 1 "
+        "RETURNING calls",
         (day,),
-    )
+    ).fetchone()
+    if row["calls"] > cap:
+        conn.execute(
+            "UPDATE recommender_usage SET calls = calls - 1 WHERE day=?", (day,)
+        )
+        raise RateLimitError(f"当日 AI 调用已达上限 {cap} 次")
 
 
 def check_minute_cap(stamps: list[float], now: float, cap: int) -> None:
@@ -129,7 +139,7 @@ class AIModelRecommender:
         base_url: str,
         api_key: str,
         model: str,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 12.0,
         client: httpx.Client | None = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -204,7 +214,8 @@ def create_recommender_from_env() -> "AIModelRecommender":
         raise RecommenderError(
             "AI 模式未配置：缺少 OOTD_AI_BASE_URL / OOTD_AI_API_KEY / OOTD_AI_MODEL"
         )
-    timeout = float(os.environ.get("OOTD_AI_TIMEOUT_SECONDS", "20"))
+    # R10：默认 12s，短于 Android 客户端的 20s 读超时，保证服务端先返回 503。
+    timeout = float(os.environ.get("OOTD_AI_TIMEOUT_SECONDS", "12"))
     return AIModelRecommender(base_url=base_url, api_key=api_key, model=model, timeout_seconds=timeout)
 
 
