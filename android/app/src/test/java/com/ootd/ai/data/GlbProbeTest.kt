@@ -97,4 +97,28 @@ class GlbProbeTest {
             empty.delete()
         }
     }
+
+    /**
+     * 2026-11-17 真机崩溃的回归：外壳全对、只有几何引用越界的包。
+     *
+     * 这类包 Filament 不是「加载失败」，是在 `AssetLoader::createAsset` 里
+     * `PreconditionPanic` → SIGABRT，整个进程死掉，Java 层拦不住。
+     * 所以必须在这里拦住，不能指望渲染层优雅失败。
+     */
+    @Test
+    fun `accessor 指向不存在的 bufferView 会被拦下`() {
+        val broken = File(repoRoot, "outputs/fault-fixtures/bad-garment/top-001.glb")
+        assumeTrue("没有生成 bad-garment 故障包，跳过", broken.isFile)
+
+        assertFalse("越界的 bufferView 引用必须拦，否则 Filament 会 abort 整进程", GlbProbe.canDecode(broken))
+    }
+
+    /** 同一个包的好版本不能被误杀 —— 补了越界校验也不能把正常模型挡在外面。 */
+    @Test
+    fun `同一个包的好版本仍然能通过`() {
+        val good = File(repoRoot, "outputs/fault-fixtures/good/top-001.glb")
+        assumeTrue("没有生成 good 故障包，跳过", good.isFile)
+
+        assertTrue("补校验不能误伤正常模型", GlbProbe.canDecode(good))
+    }
 }

@@ -29,6 +29,7 @@ object GlbProbe {
 
     private const val MAGIC_GLTF = 0x46546C67 // "glTF"
     private const val MAGIC_JSON = 0x4E4F534A // "JSON"
+    private const val MAGIC_BIN = 0x004E4942 // "BIN\0"
     private const val HEADER_BYTES = 12
     private const val CHUNK_HEADER_BYTES = 8
 
@@ -68,8 +69,12 @@ object GlbProbe {
             }
 
             var offset = HEADER_BYTES.toLong()
-            var sawJson = false
+            var jsonStart = -1L
+            var jsonLength = -1L
+            var binLength = -1L
 
+            // 先把所有 chunk 走一遍：JSON 要等 BIN 长度知道之后才能校验几何引用，
+            // 因为 bufferView 的字节范围是相对 BIN chunk 算的。
             while (offset + CHUNK_HEADER_BYTES <= size) {
                 val chunkHeader = readChunk(raf, offset, CHUNK_HEADER_BYTES)
                 val length = chunkHeader.int.toLong() and 0xFFFFFFFFL
@@ -80,23 +85,26 @@ object GlbProbe {
                     throw IllegalStateException("chunk 声明长度超出文件尾（数据被截断）")
                 }
 
-                if (!sawJson) {
+                if (jsonStart < 0) {
                     if (type != MAGIC_JSON) {
                         throw IllegalStateException("第一个 chunk 不是 JSON chunk")
                     }
                     if (length > MAX_JSON_CHUNK_BYTES) {
                         throw IllegalStateException("JSON chunk 异常大（$length 字节）")
                     }
-                    inspectJsonChunk(raf, dataStart, length)
-                    sawJson = true
+                    jsonStart = dataStart
+                    jsonLength = length
+                } else if (type == MAGIC_BIN && binLength < 0) {
+                    binLength = length
                 }
 
                 offset = dataStart + length
             }
 
-            if (!sawJson) {
+            if (jsonStart < 0) {
                 throw IllegalStateException("GLB 里没有 JSON chunk")
             }
+            inspectJsonChunk(raf, jsonStart, jsonLength, if (binLength < 0) 0L else binLength)
         }
     }
 
@@ -106,7 +114,7 @@ object GlbProbe {
      * 这里刻意不看 accessor/buffer 的数值细节 —— 那属于完整解码，成本高且容易
      * 误伤；本函数的目标只是把「结构坏」「不是模型」挡在门外。
      */
-    private fun inspectJsonChunk(raf: RandomAccessFile, start: Long, length: Long) {
+    private fun inspectJsonChunk(raf: RandomAccessFile, start: Long, length: Long, binLength: Long) {
         if (length <= 0) {
             throw IllegalStateException("JSON chunk 是空的")
         }
@@ -142,6 +150,59 @@ object GlbProbe {
         }
         if (primitives == 0) {
             throw IllegalStateException("GLB 里没有任何图元（primitives），画不出任何东西")
+        }
+
+        inspectGeometryRefs(root, binLength)
+    }
+
+    /**
+     * 校验几何引用链：`mesh.primitives` → `accessors` → `bufferViews` → BIN chunk。
+     *
+     * 这一层是 2026-11-17 真机崩溃后补的。之前只查外壳（头、版本、JSON、有 mesh），
+     * 结果一个「外壳全对、accessor 指向不存在的 bufferView」的包被放行，Filament 在
+     * `AssetLoader::createAsset` 里直接 `PreconditionPanic` → SIGABRT，
+     * Java 的 try/catch 拦不住，整个进程死掉，冷启动还会反复恢复它、反复崩。
+     *
+     * 所以越界这类错误必须在进 Filament 之前就判掉，不能指望它优雅失败。
+     */
+    private fun inspectGeometryRefs(root: JSONObject, binLength: Long) {
+        val bufferViews = root.optJSONArray("bufferViews")
+        val accessors = root.optJSONArray("accessors")
+
+        // bufferView 的字节范围必须落在 BIN chunk 里
+        if (bufferViews != null) {
+            for (i in 0 until bufferViews.length()) {
+                val view = bufferViews.optJSONObject(i) ?: continue
+                val offset = view.optLong("byteOffset", 0L)
+                val length = view.optLong("byteLength", 0L)
+                if (offset < 0 || length < 0) {
+                    throw IllegalStateException("bufferViews[$i] 的偏移或长度是负数")
+                }
+                val end = offset + length
+                if (end > binLength) {
+                    throw IllegalStateException(
+                        "bufferViews[$i] 越界：要读到第 $end 字节，BIN 只有 $binLength 字节"
+                    )
+                }
+            }
+        }
+
+        // accessor 引用的 bufferView 必须存在
+        if (accessors != null) {
+            val viewCount = bufferViews?.length() ?: 0
+            for (i in 0 until accessors.length()) {
+                val accessor = accessors.optJSONObject(i) ?: continue
+                if (!accessor.has("bufferView")) continue // sparse accessor，另行定义
+                val index = accessor.optInt("bufferView", -1)
+                if (index < 0 || index >= viewCount) {
+                    throw IllegalStateException(
+                        "accessors[$i] 指向不存在的 bufferView $index（总数 $viewCount）"
+                    )
+                }
+                if (accessor.optInt("count", 0) <= 0) {
+                    throw IllegalStateException("accessors[$i] 的元素个数是 ${accessor.optInt("count", 0)}")
+                }
+            }
         }
     }
 
