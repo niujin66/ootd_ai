@@ -64,7 +64,10 @@ person-001.glb              人台
 top-001_v2.glb              浅色印花短袖（扩展已剥离）
 top-002_v1.glb              深蓝翻领 POLO（扩展已剥离）
 validation-report.json      后端校验报告
-renders/                    联排预览图（人台六视图 / 白模六视图 / 纯衣四视图）
+renders/                    预览图
+renders/预览-top-00X-四向联排-v3.png   正/侧/背/斜侧 2×2 联排（**按本包 GLB 重渲**）
+renders/四向-v3/            同样四向的单张 1024×1024
+renders/预览-top002-人台六视图.png     11-13 版旧图（材质剥离前，仅供参考）
 tools/inspect_extensions.py 扩展自检
 tools/strip_khr_extensions.py  剥离工具（带命令行参数，可复现）
 tools/measure_chest.py      胸宽量法实测（截面半围 / 投影宽 / 围长）
