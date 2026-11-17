@@ -4,11 +4,22 @@
 用法：
     python tools/inspect_extensions.py                 # 检查当前目录所有 glb
     python tools/inspect_extensions.py a.glb b.glb     # 检查指定文件
+    python tools/inspect_extensions.py .               # 目录：检查其下所有 glb
 退出码：0 = 无禁用扩展；1 = 存在 KHR_materials_specular / KHR_materials_sheen
 """
 import struct, json, os, sys, glob
 
 STRIP = ("KHR_materials_specular", "KHR_materials_sheen")
+
+def expand(args):
+    """把目录展开成其中的 glb 文件。"""
+    files = []
+    for a in args:
+        if os.path.isdir(a):
+            files.extend(sorted(glob.glob(os.path.join(a, "*.glb"))))
+        else:
+            files.append(a)
+    return files
 
 def inspect(path):
     with open(path, "rb") as f:
@@ -33,7 +44,7 @@ def inspect(path):
     return bool(bad)
 
 if __name__ == "__main__":
-    files = sys.argv[1:] or sorted(glob.glob("*.glb"))
+    files = expand(sys.argv[1:]) or sorted(glob.glob("*.glb"))
     if not files:
         print("当前目录没有 glb 文件")
         sys.exit(0)
