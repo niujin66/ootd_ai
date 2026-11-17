@@ -80,6 +80,41 @@ B 的 R01–R04 复核完了，结论是**先别合并**：`isValid()` 只看哈
 
 从匿名源码 ZIP 解压后，使用 JDK 25 和 Android SDK 37 执行 gradlew.bat :app:assembleDebug，构建成功。比对 APK 中的清单和三件 GLB，四份文件均与 ZIP 内对应文件逐字节一致。该结果覆盖构建和打包，匿名样例的真机画面待复测。
 
+## E04 缺口修复（针对 PR #29 复核意见）
+
+2026-11-16，B（Journey668），本机 Windows / JDK 25 / Android SDK 37。
+
+[PR #31](https://github.com/niujin66/ootd_ai/pull/31) 附带的 `docs/review-pr29-20261115.md` 给出的结论是「不建议现在合并」，其中第 1 条是阻塞项：`isValid()` 只查大小与 sha256、不查能不能解码，一个「哈希完全正确、GLB 内部是坏的」包会被当成正常版本存下、标成生效版本、上屏失败，并且下次冷启动还会被再次恢复出来。PR #29 已经合并，这条缺口随 main 保留，本次单独修。
+
+**改动（仅 Android 端，未动服务端）**
+
+| 文件 | 改动 |
+|---|---|
+| `data/GlbProbe.kt`（新增） | 按 glTF 2.0 容器格式做结构探测：magic/version/声明长度、第一个 chunk 必须是 JSON、JSON 可解析、`asset.version` 是 2.x、至少一个 mesh 且有图元。不通过即抛带中文原因的异常。 |
+| `data/RemotePackageRepository.kt` | `isValid()` 在大小与哈希之后加真解码探测；`sync()` 不再写生效指针，新增 `publishActive()` 由上屏成功后调用；`sync` 与 `restoreLast` 用同一把 `Mutex` 互斥。 |
+| `data/PersistentCatalogStore.kt` | `versionsOf()` 改按 manifest 的 `saved_at` 倒序（原按目录 mtime，跨目录 rename 后不准），新增 `readSavedAt()`。 |
+| `ui/TryOnScreen.kt` | 远端包「人物 Ready」后才 `publishActive`；恢复出来的包解码失败时退回内置素材（只退一次，避免死循环）。 |
+
+**已验证（本机实际执行）**
+
+- `:app:compileDebugKotlin` 构建成功。
+- `:app:testDebugUnitTest` 中 `GlbProbeTest` 5 项全部执行、0 跳过、0 失败：真模型通过；改一个字节的同长度坏包被拦；截断包被拦；随机字节被拦；空文件被拦。
+- 覆盖的是「结构探测」这一段。它挡住的是结构坏、非模型这两类；它不做几何与 accessor 数值的完整解码，这一点在 `GlbProbe` 的注释里写明。
+
+**真机复测（E04，2026-11-16 晚）**
+
+- 设备：OPPO `25098PN5AC`（`fe474c80`），APK 指向 `127.0.0.1:8003`，假后端 `--fixtures outputs/fault-fixtures/corrupt-glb`。
+- 第一轮**没有通过**：只把探测挂在 `isValid()` 上，`sync()` 下载完只查了 size 和 sha256。结果坏包一路过：切目录 → 人物（好文件）上屏 → 衣物报 `Failed to parse glTF model from buffer` → 人物一变，`publishActive` 又把生效指针写成了 corrupt 版本。表现是标题变成 `服务端 · fixture-face-03-corrupt`、人物被换掉、衣服没了。**这正是复核意见第 1 条描述的场景，说明只修恢复侧不够。**
+- 补 `probeDecodable()`：下载每个资产后立刻探测，坏包在切目录之前就失败。
+- 第二轮**通过**，三个检查点逐条：
+  1. **冷启动不恢复坏包** —— 上一轮已经把 corrupt 版本写进缓存和生效指针；新包冷启动后顶部是「本地包 · fixture-face-03」，退回内置素材，没恢复坏版本。
+  2. **同步阶段就拦住** —— 点「拉取目录」后报「远端同步失败：top-001 解不开（GLB 头不对：magic 不是 glTF），已保留上一套素材」，没有切目录、标题没变。
+  3. **旧素材保留** —— 人物和衣物都还是原来那套，画面没有空档。
+
+**未验证**
+
+- X01 离线冷启动恢复两衣、E02 延迟旧响应被丢弃：本次只跑了 E04，这两条还没在真机上跑过。
+
 ## 每次检查填写
 
 ```text
