@@ -147,6 +147,10 @@ fun TryOnScreen(onBack: () -> Unit) {
     // 恢复出来的包如果解码失败，要允许退一次内置素材，不能把人晾在坏画面上。
     var usingRestored by remember { mutableStateOf(false) }
 
+    // E04（P0-1 补完）：切新包之前手里那一套。新包要是画不出来，就回退到它。
+    // 「失败保留旧人物、衣物、视角」不是靠祈祷，是靠真留着这一套。
+    var previousActive by remember { mutableStateOf<ActiveAssets?>(null) }
+
     // R01：操作序号。手动换衣、切换目录都会让它 +1；
     // 在途的推荐响应回来后序号对不上就整条丢弃，不许改写当前画面。
     val operationSeq = remember { mutableIntStateOf(0) }
@@ -189,6 +193,10 @@ fun TryOnScreen(onBack: () -> Unit) {
                 remoteRepository.sync(personId = "person-001") { syncStatus = it }
             }.onSuccess { pkg ->
                 val assets = pkg.toActiveAssets()
+                // E04：覆盖之前先把当前这套收好 —— 新包画不出来时要退回来。
+                // 已经有待确认包时不覆盖：那说明手里这套本身就是没确认过的，
+                // 拿它当「上一套可用素材」等于把坏的收藏起来。
+                if (publishPending == null) previousActive = active
                 remoteAssets = assets
                 active = assets
                 usingRestored = false
@@ -207,32 +215,45 @@ fun TryOnScreen(onBack: () -> Unit) {
         }
     }
 
-    /** E04：这一版真的画出来了，才承认它是生效版本。重复调用无副作用。 */
+    /** E04：人物和默认衣物都真的画出来了，才承认它是生效版本。重复调用无副作用。 */
     fun confirmVisible() {
         val pkg = publishPending ?: return
         publishPending = null
+        // 这版已经确认，没有待回的旧版了
+        previousActive = null
         scope.launch { runCatching { remoteRepository.publishActive(pkg) } }
     }
 
     /**
-     * E04 复核意见第 2 条：恢复出来的包解不开时退回内置素材。
+     * E04：这一套画不出来时，回到上一套能用的。
      *
-     * 只在「这一套是从本机恢复的」时才退 —— 本来就在用内置素材还失败，再退一次
-     * 只会变成死循环。退之前先把远端那套摘掉，免得界面继续显示它的版本号。
+     * 两种来源分开处理：
+     * - 刚从本机恢复出来的包坏了 → 退手机内置素材（复核意见第 2 条）
+     * - 刚同步下来、还没确认生效的包坏了 → 退同步之前那一套（P0-1）
+     *
+     * 两种情况都不写生效指针，所以下次冷启动仍然恢复上一版。
+     * 已经确认生效的包不因一次渲染失败就丢弃 —— 那属于运行期问题，不是包的问题。
      */
-    fun fallbackToLocal() {
-        if (!usingRestored) return
+    fun rollbackToSafe(reason: String) {
+        if (publishPending == null && !usingRestored) return
+        val previous = previousActive
+        publishPending = null
         usingRestored = false
+        previousActive = null
         scope.launch {
-            runCatching { localRepository.loadActiveAssets() }
-                .onSuccess { local ->
-                    localAssets = local
-                    remoteAssets = null
-                    publishPending = null
-                    active = local
-                    offlineNotice = "上次的素材打不开，已退回手机内置素材。点「拉取目录」可重新下载"
-                }
-                .onFailure { localError = it.message ?: "本地资产包读取失败" }
+            val fallback = previous ?: runCatching { localRepository.loadActiveAssets() }.getOrNull()
+            if (fallback == null) {
+                localError = "$reason，而且没有可用的备用素材"
+                return@launch
+            }
+            if (previous != null) {
+                remoteAssets = previous
+            } else {
+                remoteAssets = null
+                localAssets = fallback
+            }
+            active = fallback
+            offlineNotice = "这套素材打不开（$reason），已回到上一套可用素材。点「拉取目录」可重新下载"
         }
     }
 
@@ -259,8 +280,8 @@ fun TryOnScreen(onBack: () -> Unit) {
                 syncStatus = syncStatus,
                 syncError = syncError,
                 offlineNotice = offlineNotice,
-                onPersonReady = { confirmVisible() },
-                onPersonFailed = { fallbackToLocal() },
+                onSceneReady = { confirmVisible() },
+                onSceneBroken = { rollbackToSafe(it) },
                 onRecommend = { requestId, scene, preference, onResult ->
                     scope.launch {
                         // 网络请求必须离开主线程，否则 NetworkOnMainThreadException
@@ -295,10 +316,10 @@ private fun TryOnContent(
     syncStatus: String?,
     syncError: String?,
     offlineNotice: String?,
-    /** E04：人物真的画上屏了 —— 只有这时候才承认这一版资源生效。 */
-    onPersonReady: () -> Unit,
-    /** E04：人物解不开 —— 由上层决定要不要退回内置素材。 */
-    onPersonFailed: () -> Unit,
+    /** E04：人物和默认衣物都真的画上屏了 —— 只有这时候才承认这一版资源生效。 */
+    onSceneReady: () -> Unit,
+    /** E04：这一套画不出来（人物或首件衣物）—— 由上层决定回到哪一套。 */
+    onSceneBroken: (reason: String) -> Unit,
     onRecommend: (
         requestId: String,
         scene: String,
@@ -333,14 +354,22 @@ private fun TryOnContent(
         // 候选解码失败时也靠它保住当前衣物，人物与镜头不受影响。
         var appliedGarmentState by remember { mutableStateOf<ModelLoadState?>(null) }
 
-        // E04：人物的实际加载结果决定这一版资源算不算生效。
-        // 结构探测能挡住大部分坏包，但真正的判据是 Filament 能不能把它画出来 ——
-        // Ready 了才落生效指针，Failed 了给上层一次退回内置素材的机会。
+        // E04（P0-1 补完）：判据是「真的画出来了」，而且人物和默认衣物都要算。
+        // 只看人物的话，「人好、衣服坏」的包照样会被记成生效版本。
+        var garmentVerified by remember { mutableStateOf(false) }
+
         LaunchedEffect(personState) {
             when (personState) {
-                is ModelLoadState.Ready -> onPersonReady()
-                is ModelLoadState.Failed -> onPersonFailed()
+                is ModelLoadState.Failed -> onSceneBroken("人物模型解不开")
                 else -> Unit
+            }
+        }
+
+        // 两条都成立才放行：人物 Ready + 首件衣物 Ready
+        LaunchedEffect(personState, garmentVerified) {
+            val personReady = personState is ModelLoadState.Ready
+            if (PublishGate.shouldPublish(personReady = personReady, garmentReady = garmentVerified)) {
+                onSceneReady()
             }
         }
 
@@ -351,6 +380,8 @@ private fun TryOnContent(
                     garmentError = null
                     appliedGarmentId = requestedGarmentId
                     appliedGarmentState = state
+                    // 这套资源的衣物真的被画出来了
+                    garmentVerified = true
                 }
 
                 is ModelLoadState.Failed -> {
@@ -359,6 +390,9 @@ private fun TryOnContent(
                             (state.error.message ?: "无法识别的 glTF 错误")
                         rollbackGuard = true
                         requestedGarmentId = appliedGarmentId
+                    } else if (appliedGarmentState == null) {
+                        // 这套资源一件衣服都画不出来 —— 整包不能用，别让人对着空身子
+                        onSceneBroken("衣物模型解不开")
                     } else {
                         garmentError = "衣物加载失败：" +
                             (state.error.message ?: "无法识别的 glTF 错误")
