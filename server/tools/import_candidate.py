@@ -6,7 +6,7 @@
 做的事情是：
 
   1. 检查 manifest 基本字段（person_id / catalog_version / assets，至少两件可用上衣）
-  2. 逐个资产：文件存在、体积、sha256；如果同目录有 validation-report.json，就核对哈希
+  2. 逐个资产：文件存在、体积、sha256；先和 manifest 里声明的值比，再和 validation-report.json 交叉核对
   3. 按 GLB 容器结构真正解一遍：magic/version/length、JSON chunk、meshes/accessors/
      bufferViews 的索引和字节范围，确认「能解码」，不是只对哈希
   4. 用和 importer.py 完全相同的 content_digest 算法，把版本和资产写进 SQLite
@@ -145,7 +145,7 @@ def load_manifest(package: Path) -> dict:
 
 
 def verify_assets(package: Path, manifest: dict):
-    """逐个文件算哈希、解 GLB，并核对 validation-report.json（若有）。"""
+    """逐个文件算哈希、解 GLB，并和 manifest / validation-report 的声明核对。"""
     report_path = package / "validation-report.json"
     report_assets = {}
     if report_path.is_file():
@@ -165,7 +165,39 @@ def verify_assets(package: Path, manifest: dict):
             raise PackageError(f"文件不存在：{relative}")
         data = path.read_bytes()
         sha = sha256_file(path)
-        expected = report_assets.get(relative) or {}
+
+        # 第一道：清单（manifest）自己声明的哈希/体积必须和文件实际一致。
+        # 少了这一步，一个被篡改的 manifest（比如把 top-001 的 sha256 写成 64 个 0）
+        # 只要不带 validation-report.json 就能大摇大摆通过，E03 直接漏检。
+        #
+        # 注意：真实候选包的 manifest.json 本来就不带 sha256（A 的包就是这样，
+        # 哈希只写在 validation-report.json 里）。所以这里分两种情况：
+        #   - manifest 写了 sha256：必须和文件实际值一致，否则 E03；
+        #   - manifest 没写 sha256：退回用 validation-report 的声明值来核对，
+        #     两边都没有才只能做到"文件存在 + 能解码"这一层。
+        decl_sha = (entry.get("sha256") or "").strip().lower()
+        report_entry = report_assets.get(relative) or {}
+        report_sha = (report_entry.get("sha256") or "").strip().lower()
+        reference_sha = decl_sha or report_sha
+        reference_src = "manifest" if decl_sha else ("validation-report" if report_sha else None)
+        if reference_src and reference_sha != sha:
+            raise PackageError(
+                f"{relative} 的 sha256 和 {reference_src} 声明不一致："
+                f"文件实际 {sha} != 声明 {reference_sha}"
+            )
+
+        decl_size = entry.get("size_bytes")
+        if decl_size is None:
+            decl_size = report_entry.get("size_bytes")
+        if decl_size is not None and decl_size != len(data):
+            raise PackageError(
+                f"{relative} 的体积和清单声明不一致："
+                f"{len(data)} != {decl_size}"
+            )
+
+        # 第二道：如果包里还带了 validation-report.json，再拿它交叉核对一次
+        # （manifest 和 report 都写了哈希时，等于三方对齐：文件 / 清单 / 报告）。
+        expected = report_entry
         if expected.get("sha256") and expected["sha256"] != sha:
             raise PackageError(
                 f"{relative} 的 sha256 和 validation-report 不一致："

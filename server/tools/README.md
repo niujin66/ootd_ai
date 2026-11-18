@@ -89,3 +89,21 @@ python server/tools/fault_server.py --fixtures outputs/fault-fixtures/good --por
 - `good/` 现在默认是真实 GLB，能真正走完「下载 → 校验 → 解码 → 上屏」；只有找不到真实候选包时才用占位字节。
 - `sha-mismatch/` 的文件是真的，只是 `manifest.json` 里 top-001 的 `sha256` 被写成了 64 个 0。
 - `corrupt-glb/` 里 top-001 的字节是坏数据，但 `manifest.json` 的 `sha256` 是按坏字节算的——所以哈希能过、解码必挂，正好对应 E04。
+
+## 校验器信谁：文件、manifest、validation-report 三方对齐
+
+`import_candidate.py` 校验时按这个顺序对：
+
+1. **文件实际算出来的 sha256 / 体积** 是基准；
+2. 跟 **`manifest.json` 里声明的** 比，不一致就报「和 manifest 声明不一致」（E03 走这条）；
+3. 如果包里还带了 **`validation-report.json`**，再跟它比一次，不一致报「和 validation-report 声明不一致」。
+
+注意一个坑：A 交过来的真实候选包里，`manifest.json` **本来就不写 sha256**（哈希只写在 `validation-report.json` 里）。所以校验器在 manifest 没写哈希时，会退回用 validation-report 的声明值来核对。两边都没有声明时，就只能做到「文件存在 + GLB 能解码」这一层——这种情况会照常放行，但强度有限，正式发布应当走带哈希的完整校验。
+
+自检命令（都带 `--dry-run`，不写库不拷文件）：
+
+```bash
+python server/tools/import_candidate.py outputs/fault-fixtures/good        --dry-run   # exit 0
+python server/tools/import_candidate.py outputs/fault-fixtures/sha-mismatch --dry-run  # exit 1，报 sha256 与 manifest 声明不一致
+python server/tools/import_candidate.py outputs/fault-fixtures/corrupt-glb  --dry-run  # exit 1，报解不了
+```
