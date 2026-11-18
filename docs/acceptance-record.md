@@ -1,8 +1,20 @@
 # 验收记录
 
-## 2026-11-18 任务表更新
+## 2026-11-18 兼容包导入与后端回归
 
-远端 main 已到 `7af6fc9`（`#37`/`#38`/`#39` 合入），任务表按 11/18–21 轮次重排，见[当前任务卡](first-week.md)。03b 交接清单（完整 SHA-256、源工程与导出链）和 A04 胸宽量法说明随 main 合入 `local-data/handoff/`；本轮尚未新增真机、后端或推荐复测，`fixture-face-03b` 目前只有标准库工具的导入记录，正式入口 `server/import_package.py` 导入、两衣外观与独立验收仍待执行，Q05 数量与 Q06 结论不因合入或换包自动更新。
+本机基线 `main@80de331`，Windows / Python 3.12.13。#37–#39 均已合入，检查点见[11/18–21 任务卡](first-week.md)。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 03b 正式入口 | `server/import_package.py` 在独立 SQLite 与资源目录首次导入成功。目录 `fixture-face-03b`、姿势 `pose-001`，数据库登记一个版本、三项资产。相同包第二次导入返回已存在并跳过，两个命令均 exit 0。 |
+| 交付文件核对 | 人物、短袖、POLO 的源 GLB、`validation-report.json` 与导入副本 SHA-256 三方一致。`content_digest` 为 `f0c05a0d8b86a8bfbbb5b314692af66cc5468f252c957bae6e6490b4f7388ca0`，与 C 的标准库导入记录一致。 |
+| Q05 后端回归 | `python -m unittest discover -s server/tests -p 'test_*.py'` 共执行 81 项，80 通过、0 失败、1 跳过。 |
+| Android 与外观 | B 在开发分支的真机记录覆盖越界 GLB 被拒、旧素材保留，以及原始实衣包加载后无闪退。合并版 APK、第二件加载失败、两衣四视角贴合、最后远端包离线恢复和 C 独立真机结果待登记。 |
+| Q04-ai | 真实模型调用未测，配置与网络条件见 #26。 |
+
+复跑时给 `server/import_package.py` 显式传 `--db-path` 和 `--assets-root`，将候选库和演示库隔离。包路径为 [`local-data/handoff/T02-candidate-20261117/`](../local-data/handoff/T02-candidate-20261117/)。
+
+证据见 [C 的导入记录](https://github.com/niujin66/ootd_ai/issues/19#issuecomment-6948440976)、[B 的真机记录](https://github.com/niujin66/ootd_ai/issues/12#issuecomment-6975814951)和[模型配置记录](https://github.com/niujin66/ootd_ai/issues/26#issuecomment-6948441584)。
 
 ## 2026-11-17 仓库核查
 
@@ -10,7 +22,9 @@
 
 本轮检查代码、Git 历史和 Issue 评论，未新增真机通过项。下一检查点见 [当前任务卡](first-week.md)，历史测试数和通过范围不自动扩展到当前版本。
 
-维护人 C（uniquebugle-stack）。2026-11-13 根据 #1/#12/#13/#19 最新记录同步状态并重排任务；本次文档整理没有新增真机、后端或推荐复测。开发者真机、C 模拟器、证据复核和 C 独立真机分别登记，检查点见[当前任务卡](first-week.md)。
+## 2026-11-13 验收快照
+
+维护人 C（uniquebugle-stack）。以下为按 #1/#12/#13/#19 留存的历史状态与旧检查点。开发者真机、C 模拟器、证据复核和 C 独立真机分别登记。
 
 | 编号 | 检查项 | 当前证据与结论 | 下一步 |
 | --- | --- | --- | --- |
