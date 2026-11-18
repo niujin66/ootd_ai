@@ -59,12 +59,19 @@ class RemotePackageRepository(
                 val personDir = File(cacheRoot, personId)
                 val target = File(personDir, catalog.catalogVersion)
 
-                if (isValid(target, catalog)) {
+                // 服务端目录里的 sha256 描述的是「原始文件」；本地这份可能被净化过
+                // （剥掉 Filament 会崩的材质扩展），哈希自然对不上。所以服务端校验
+                // 不过时，再用本地快照复核一次 —— 那份快照记的就是落盘文件的哈希。
+                val localManifest = store.readManifest(personId, catalog.catalogVersion)
+                val reusable = isValid(target, catalog) ||
+                    (localManifest != null && isValid(target, localManifest))
+                if (reusable) {
                     onProgress("复用已缓存版本 ${catalog.catalogVersion}")
                     // R03：快照也补齐，冷启动时才认得出这一版。
                     // E04：生效指针不在这一步写 —— 见 publishActive()。
-                    store.saveManifest(catalog)
-                    return@withContext RemotePackage(catalog, target, filesOf(target, catalog))
+                    val snapshot = localManifest ?: catalog
+                    store.saveManifest(snapshot)
+                    return@withContext RemotePackage(snapshot, target, filesOf(target, snapshot))
                 }
 
                 // R03：清掉上次下载中断留下的临时目录，避免越积越多
@@ -79,16 +86,27 @@ class RemotePackageRepository(
                         catalog.person?.let { add(it) }
                         addAll(catalog.garments)
                     }
+                    val sanitizedAssets = mutableMapOf<String, RemoteAsset>()
                     ordered.forEachIndexed { index, asset ->
                         onProgress("下载 ${asset.assetId}（${index + 1}/${ordered.size}）…")
                         val dest = File(staging, fileNameOf(asset))
                         api.download(asset.assetUrl, dest)
+                        // 顺序不能换：verify 比的是服务端原始文件的哈希，
+                        // 净化会改字节，必须放在 verify 之后。
                         verify(dest, asset)
+                        val effective = sanitizeIfNeeded(dest, asset)
+                        if (effective !== asset) sanitizedAssets[asset.assetId] = effective
                         // E04：哈希对不代表能打开。下载完立刻做一次真解码探测，
                         // 坏包必须在「切换」之前就被拒 —— 否则它会先切目录、再上屏失败，
                         // 不但旧素材被顶掉，生效指针也会被写成这一版。
-                        probeDecodable(dest, asset)
+                        probeDecodable(dest, effective)
                     }
+
+                    // 净化过的资产，快照里要记它落盘后的真实哈希，
+                    // 否则下一轮 sync 复用缓存、以及冷启动恢复都会判它「哈希不符」。
+                    val effectiveCatalog =
+                        if (sanitizedAssets.isEmpty()) catalog
+                        else catalog.copy(assets = catalog.assets.map { sanitizedAssets[it.assetId] ?: it })
 
                     // 全部通过，才替换旧版本
                     if (target.exists()) target.deleteRecursively()
@@ -102,10 +120,10 @@ class RemotePackageRepository(
                     // R03：校验全部通过、目录已经切过去，才落快照。
                     // E04：这里不写生效指针 —— 包还没真正上过屏，
                     // 写指针等于替用户宣布「这一版能用」。由界面在上屏成功后调 publishActive()。
-                    store.saveManifest(catalog)
+                    store.saveManifest(effectiveCatalog)
 
                     onProgress("已切换到 ${catalog.catalogVersion}（${ordered.size} 个资产，校验通过）")
-                    RemotePackage(catalog, target, filesOf(target, catalog))
+                    RemotePackage(effectiveCatalog, target, filesOf(target, effectiveCatalog))
                 } catch (t: Throwable) {
                     staging.deleteRecursively()
                     throw t
@@ -223,6 +241,22 @@ class RemotePackageRepository(
             // 后缀「已保留当前资源」由界面统一补，这里只说清哪个文件、为什么坏
             throw IllegalStateException("${asset.assetId} 解不开（${e.message}）", e)
         }
+    }
+
+    /**
+     * 剥掉「文件合法、但 Filament 会崩」的材质扩展。
+     *
+     * 2026-11-18 定位：服务端下发的衣物包带了 `KHR_materials_specular` / `KHR_materials_sheen`，
+     * 文件经 Khronos 校验器 0 错 0 警，Filament 1.77.3 处理时却直接 abort 掉整个进程。
+     * 这两个扩展都在 `extensionsUsed` 而不是 `extensionsRequired`，按规范客户端可以忽略，
+     * 所以剥掉不算降级 —— 剥完的文件和 App 内置素材逐字节一致，那份在真机上一直能用。
+     *
+     * 返回更新后的资产条目（记的是净化后落盘文件的真实哈希）；没改动就原样返回。
+     */
+    private fun sanitizeIfNeeded(file: File, asset: RemoteAsset): RemoteAsset {
+        val changed = runCatching { GlbSanitizer.sanitizeInPlace(file) }.getOrDefault(false)
+        if (!changed) return asset
+        return asset.copy(sizeBytes = file.length(), sha256 = sha256(file))
     }
 
     private fun verify(file: File, asset: RemoteAsset) {
