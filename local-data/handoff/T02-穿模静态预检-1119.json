@@ -1,0 +1,110 @@
+[
+  {
+    "file": "top-001_v2.glb",
+    "vertices": 6369,
+    "inside_total": 24,
+    "regions": {
+      "肩/领 (y>1.42)": {
+        "n": 2469,
+        "inside": 24,
+        "penetration_max_mm": 3.7,
+        "clearance_min_mm": 0.51,
+        "clearance_median_mm": 15.71,
+        "critical_lt2mm": 21
+      },
+      "腋下/胸 (1.20-1.42)": {
+        "n": 2044,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.12,
+        "clearance_median_mm": 17.73,
+        "critical_lt2mm": 0
+      },
+      "躯干 (0.95-1.20)": {
+        "n": 998,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.84,
+        "clearance_median_mm": 30.67,
+        "critical_lt2mm": 0
+      },
+      "下摆 (y<0.95)": {
+        "n": 858,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.15,
+        "clearance_median_mm": 20.98,
+        "critical_lt2mm": 0
+      }
+    },
+    "inside_points": {
+      "x_range_m": [
+        -0.083,
+        0.083
+      ],
+      "y_range_m": [
+        1.527,
+        1.533
+      ],
+      "z_range_m": [
+        -0.121,
+        -0.094
+      ],
+      "within_neck_center_absx_lt_0p25": 24
+    }
+  },
+  {
+    "file": "top-002_v1.glb",
+    "vertices": 6503,
+    "inside_total": 10,
+    "regions": {
+      "肩/领 (y>1.42)": {
+        "n": 2430,
+        "inside": 10,
+        "penetration_max_mm": 2.3,
+        "clearance_min_mm": 0.07,
+        "clearance_median_mm": 17.27,
+        "critical_lt2mm": 21
+      },
+      "腋下/胸 (1.20-1.42)": {
+        "n": 2455,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.12,
+        "clearance_median_mm": 19.0,
+        "critical_lt2mm": 0
+      },
+      "躯干 (0.95-1.20)": {
+        "n": 886,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.84,
+        "clearance_median_mm": 28.89,
+        "critical_lt2mm": 0
+      },
+      "下摆 (y<0.95)": {
+        "n": 732,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.15,
+        "clearance_median_mm": 19.31,
+        "critical_lt2mm": 0
+      }
+    },
+    "inside_points": {
+      "x_range_m": [
+        -0.079,
+        0.079
+      ],
+      "y_range_m": [
+        1.532,
+        1.543
+      ],
+      "z_range_m": [
+        -0.107,
+        -0.009
+      ],
+      "within_neck_center_absx_lt_0p25": 10
+    }
+  }
+]
