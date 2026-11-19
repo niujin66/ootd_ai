@@ -198,22 +198,12 @@ class PersistentCatalogStore(context: Context) {
     }
 
     /**
-     * 原子写：先写 .tmp，再改名顶上。
-     * 写到一半掉电，留下的只是 .tmp，正式文件仍是上一份完好的。
+     * P0-2：原子写交给 [AtomicFileWrite]。
+     *
+     * 具体为什么不「先删目标再改名」、为什么失败要抛异常，见那个类的注释。
+     * 这里只保留一行调用，让 store 自己不再有第二套写文件逻辑。
      */
     private fun writeAtomically(target: File, content: String) {
-        target.parentFile?.mkdirs()
-        val tmp = File(target.parentFile, "${target.name}.tmp")
-        tmp.writeText(content)
-        if (target.exists() && !target.delete()) {
-            // 删不掉就直接覆盖，代价是可能留下半个文件，但至少不会两边都不对
-            target.writeText(content)
-            tmp.delete()
-            return
-        }
-        if (!tmp.renameTo(target)) {
-            target.writeText(content)
-            tmp.delete()
-        }
+        AtomicFileWrite.write(target, content)
     }
 }
