@@ -1,0 +1,230 @@
+[
+  {
+    "file": "top-001_v2.glb",
+    "scheme": "A 净样",
+    "target_c_half_cm": 53.0,
+    "scale_xz": 0.975157,
+    "c_half_cm": 53.0,
+    "w_proj_cm": 38.5,
+    "inside_total": 26,
+    "penetration_max_mm": 4.36,
+    "clearance_min_mm": 0.01,
+    "critical_lt2mm": 29,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2469,
+        "inside": 26,
+        "penetration_max_mm": 4.36,
+        "clearance_min_mm": 0.01
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2044,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.34
+      },
+      "躯干 0.95-1.20": {
+        "n": 998,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 8.41
+      },
+      "下摆 y<0.95": {
+        "n": 858,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.8
+      }
+    }
+  },
+  {
+    "file": "top-001_v2.glb",
+    "scheme": "B 成衣外轮廓（现状）",
+    "target_c_half_cm": 54.35,
+    "scale_xz": 1.0,
+    "c_half_cm": 54.35,
+    "w_proj_cm": 39.48,
+    "inside_total": 24,
+    "penetration_max_mm": 3.7,
+    "clearance_min_mm": 0.51,
+    "critical_lt2mm": 21,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2469,
+        "inside": 24,
+        "penetration_max_mm": 3.7,
+        "clearance_min_mm": 0.51
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2044,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.12
+      },
+      "躯干 0.95-1.20": {
+        "n": 998,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.84
+      },
+      "下摆 y<0.95": {
+        "n": 858,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.15
+      }
+    }
+  },
+  {
+    "file": "top-001_v2.glb",
+    "scheme": "C 净样+松量",
+    "target_c_half_cm": 57.4,
+    "scale_xz": 1.056114,
+    "c_half_cm": 57.4,
+    "w_proj_cm": 41.7,
+    "inside_total": 10,
+    "penetration_max_mm": 1.52,
+    "clearance_min_mm": 0.0,
+    "critical_lt2mm": 10,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2469,
+        "inside": 10,
+        "penetration_max_mm": 1.52,
+        "clearance_min_mm": 0.0
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2044,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 6.39
+      },
+      "躯干 0.95-1.20": {
+        "n": 998,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 19.47
+      },
+      "下摆 y<0.95": {
+        "n": 858,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 19.14
+      }
+    }
+  },
+  {
+    "file": "top-002_v1.glb",
+    "scheme": "A 净样",
+    "target_c_half_cm": 53.0,
+    "scale_xz": 0.975157,
+    "c_half_cm": 53.0,
+    "w_proj_cm": 38.5,
+    "inside_total": 11,
+    "penetration_max_mm": 2.1,
+    "clearance_min_mm": 0.1,
+    "critical_lt2mm": 26,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2430,
+        "inside": 11,
+        "penetration_max_mm": 2.1,
+        "clearance_min_mm": 0.1
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2455,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 6.08
+      },
+      "躯干 0.95-1.20": {
+        "n": 886,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 8.41
+      },
+      "下摆 y<0.95": {
+        "n": 732,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.8
+      }
+    }
+  },
+  {
+    "file": "top-002_v1.glb",
+    "scheme": "B 成衣外轮廓（现状）",
+    "target_c_half_cm": 54.35,
+    "scale_xz": 1.0,
+    "c_half_cm": 54.35,
+    "w_proj_cm": 39.48,
+    "inside_total": 10,
+    "penetration_max_mm": 2.3,
+    "clearance_min_mm": 0.07,
+    "critical_lt2mm": 21,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2430,
+        "inside": 10,
+        "penetration_max_mm": 2.3,
+        "clearance_min_mm": 0.07
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2455,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 7.12
+      },
+      "躯干 0.95-1.20": {
+        "n": 886,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.84
+      },
+      "下摆 y<0.95": {
+        "n": 732,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 12.15
+      }
+    }
+  },
+  {
+    "file": "top-002_v1.glb",
+    "scheme": "C 净样+松量",
+    "target_c_half_cm": 57.4,
+    "scale_xz": 1.056114,
+    "c_half_cm": 57.4,
+    "w_proj_cm": 41.7,
+    "inside_total": 9,
+    "penetration_max_mm": 2.64,
+    "clearance_min_mm": 0.06,
+    "critical_lt2mm": 10,
+    "regions": {
+      "肩/领 y>1.42": {
+        "n": 2430,
+        "inside": 9,
+        "penetration_max_mm": 2.64,
+        "clearance_min_mm": 0.06
+      },
+      "腋下/胸 1.20-1.42": {
+        "n": 2455,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 3.72
+      },
+      "躯干 0.95-1.20": {
+        "n": 886,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 19.47
+      },
+      "下摆 y<0.95": {
+        "n": 732,
+        "inside": 0,
+        "penetration_max_mm": 0.0,
+        "clearance_min_mm": 18.51
+      }
+    }
+  }
+]

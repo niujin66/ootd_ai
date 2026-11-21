@@ -1,0 +1,54 @@
+{
+  "package": "D:\\Desktop\\软创\\local-data\\handoff\\T02-candidate-20261117",
+  "csv": "D:\\Desktop\\软创\\local-data\\garments\\measurements.csv",
+  "garments": {
+    "top-001": {
+      "y_min_m": 0.775,
+      "y_max_m": 1.5448,
+      "length_y_cm": 76.98,
+      "hem_span_x_cm": 40.82,
+      "chest_loop_half_cm": 54.35,
+      "chest_proj_x_cm": 39.48,
+      "sleeve_outer_x_cm": 40.04,
+      "sleeve_lateral_cm": 20.3,
+      "shoulder_span_x_cm": null,
+      "neck_span_x_cm": null,
+      "manual_marker_required": [
+        "shoulder_span_x_cm",
+        "neck_span_x_cm"
+      ],
+      "vertices": 6369,
+      "real_flat": {
+        "length_cm": "74",
+        "chest_width_cm": "53",
+        "sleeve_length_cm": "21",
+        "front_file": "top-001front.jpg",
+        "back_file": "top-001back.jpg"
+      }
+    },
+    "top-002": {
+      "y_min_m": 0.801,
+      "y_max_m": 1.5743,
+      "length_y_cm": 77.33,
+      "hem_span_x_cm": 40.82,
+      "chest_loop_half_cm": 54.35,
+      "chest_proj_x_cm": 39.48,
+      "sleeve_outer_x_cm": 40.54,
+      "sleeve_lateral_cm": 20.8,
+      "shoulder_span_x_cm": null,
+      "neck_span_x_cm": null,
+      "manual_marker_required": [
+        "shoulder_span_x_cm",
+        "neck_span_x_cm"
+      ],
+      "vertices": 6503,
+      "real_flat": {
+        "length_cm": "72",
+        "chest_width_cm": "53",
+        "sleeve_length_cm": "20",
+        "front_file": "top-002front.jpg",
+        "back_file": "top-002back.jpg"
+      }
+    }
+  }
+}
