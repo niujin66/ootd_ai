@@ -1,6 +1,7 @@
 package com.ootd.ai.data
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -108,14 +109,10 @@ class RemotePackageRepository(
                         if (sanitizedAssets.isEmpty()) catalog
                         else catalog.copy(assets = catalog.assets.map { sanitizedAssets[it.assetId] ?: it })
 
-                    // 全部通过，才替换旧版本
-                    if (target.exists()) target.deleteRecursively()
-                    if (!staging.renameTo(target)) {
-                        // 某些设备跨目录改名会失败，退化为逐文件搬移
-                        target.mkdirs()
-                        staging.listFiles()?.forEach { it.copyTo(File(target, it.name), overwrite = true) }
-                        staging.deleteRecursively()
-                    }
+                    // P0-2：切版本目录交给 PackageDirSwap。
+                    // 它保证「要么整份换成，要么一点没变」——不再先删旧版，
+                    // 而是把旧版挪开、新版顶上、成功了才删旧的。
+                    PackageDirSwap.swapIn(target, staging)
 
                     // R03：校验全部通过、目录已经切过去，才落快照。
                     // E04：这里不写生效指针 —— 包还没真正上过屏，
@@ -125,6 +122,10 @@ class RemotePackageRepository(
                     onProgress("已切换到 ${catalog.catalogVersion}（${ordered.size} 个资产，校验通过）")
                     RemotePackage(effectiveCatalog, target, filesOf(target, effectiveCatalog))
                 } catch (t: Throwable) {
+                    // P0-2：取消要原样上抛。不能当成普通失败吞掉，
+                    // 否则界面会把「用户自己取消」显示成「同步失败」，
+                    // 状态还停在半路。取消时也不做清理，把收尾交给下一次 sync。
+                    if (t is CancellationException) throw t
                     staging.deleteRecursively()
                     throw t
                 }

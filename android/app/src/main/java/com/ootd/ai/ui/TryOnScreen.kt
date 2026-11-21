@@ -50,6 +50,7 @@ import com.ootd.ai.data.LocalAssetRepository
 import com.ootd.ai.data.RecommendationRequest
 import com.ootd.ai.data.RemotePackage
 import com.ootd.ai.data.RemotePackageRepository
+import com.ootd.ai.data.runCatchingNotCancelling
 import com.ootd.ai.data.toActiveAssets
 import io.github.sceneview.ModelLoadState
 import io.github.sceneview.SceneView
@@ -158,7 +159,8 @@ fun TryOnScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         // R04：先试离线冷启动恢复。走本地文件，不发任何网络请求，
         // 飞行模式下也能把上次生效的素材还原出来。
-        val restored = runCatching { remoteRepository.restoreLast() }.getOrNull()
+        // P0-2：用取消安全版 —— 页面被销毁时取消要能真正中止，不能被当成「没有可恢复的包」
+        val restored = runCatchingNotCancelling { remoteRepository.restoreLast() }.getOrNull()
         if (restored != null) {
             val assets = restored.toActiveAssets()
             remoteAssets = assets
@@ -189,7 +191,7 @@ fun TryOnScreen(onBack: () -> Unit) {
         syncError = null
         syncStatus = "准备中…"
         scope.launch {
-            runCatching {
+            runCatchingNotCancelling {
                 remoteRepository.sync(personId = "person-001") { syncStatus = it }
             }.onSuccess { pkg ->
                 val assets = pkg.toActiveAssets()
@@ -221,7 +223,17 @@ fun TryOnScreen(onBack: () -> Unit) {
         publishPending = null
         // 这版已经确认，没有待回的旧版了
         previousActive = null
-        scope.launch { runCatching { remoteRepository.publishActive(pkg) } }
+        scope.launch {
+            runCatchingNotCancelling { remoteRepository.publishActive(pkg) }
+                .onFailure { t ->
+                    // P0-2：「提交失败不报同步成功」。
+                    // 素材本身是好的（已经上屏了），失败的是「记住这一版」这件事，
+                    // 所以画面不用回滚，但绝不能装作一切正常 —— 如实说清楚：
+                    // 下次冷启动可能会回到上一版。
+                    offlineNotice =
+                        "素材已上屏，但记录生效版本失败（${t.message ?: "未知原因"}）。下次启动可能回到上一版"
+                }
+        }
     }
 
     /**
@@ -538,14 +550,18 @@ private fun TryOnContent(
                                     if (r.isNoMatch) {
                                         recommendationError = r.reason.ifBlank { "没有合适的衣物" }
                                     } else {
-                                        val target = garments.firstOrNull { it.assetId == r.garmentId }
-                                        if (target == null) {
-                                            recommendationError =
-                                                "返回的编号 ${r.garmentId} 不在当前目录，保持当前衣物"
+                                        // P1：衣物是否在这次目录里，由 RecommendationGuard 统一判断，
+                                        // 免得「这里查一遍、别处又查一遍」两套规则慢慢跑偏
+                                        val reject = com.ootd.ai.data.RecommendationGuard.rejectReason(
+                                            r,
+                                            garments.map { it.assetId }.toSet()
+                                        )
+                                        if (reject != null) {
+                                            recommendationError = "$reject，保持当前衣物"
                                         } else {
                                             garmentError = null
                                             rollbackGuard = false
-                                            requestedGarmentId = target.assetId
+                                            requestedGarmentId = r.garmentId
                                         }
                                     }
                                 }.onFailure { t ->
