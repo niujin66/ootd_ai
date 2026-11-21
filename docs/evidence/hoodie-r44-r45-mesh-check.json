@@ -1,0 +1,18 @@
+{
+  "44": {
+    "shared": 470,
+    "same": 225,
+    "free": 92
+  },
+  "45": {
+    "shared": 470,
+    "same": 74,
+    "free": 92,
+    "moved": 494,
+    "affected_groups": [
+      "hood",
+      "hood_fill"
+    ],
+    "changed_connectivity": 0
+  }
+}
