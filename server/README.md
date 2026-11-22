@@ -68,6 +68,7 @@ Invoke-RestMethod "$base/v1/recommendations" -Method Post -Headers $headers -Con
 | GET /v1/catalog?person_id=... | person_id、catalog_version、pose_id、assets |
 | GET /v1/assets/{person_id}/{catalog_version}/{asset_id} | 已发布 GLB 文件 |
 | POST /v1/recommendations | 回显 request_id/person_id/catalog_version，返回 status/garment_id/reason/mode |
+| POST /v1/capture/guide | 输入采集质检指标，返回确定性缺口诊断（`diagnosis`）与按优先级排序的补拍步骤（`guide`）及 `mode` |
 
 每项目录资产有 `asset_id`、`asset_type`、`display_name`、`tags`、`available`、`asset_url`、`size_bytes`、`sha256`。`asset_url` 是相对于服务地址的路径。人物条目也需要下载；available 用来筛选可推荐衣物。
 
@@ -77,7 +78,7 @@ mock 选择按偏好中的浅/白/亮、深/黑/暗、红/粉匹配已有标签�
 
 ## 真实 AI 接入状态
 
-适配器支持兼容 `/chat/completions` 的服务，只传衣物 ID、标签、场合和偏好。结构、未知 ID 与禁用衣物由服务端独立校验。自动化测试模拟供应商输出，真实服务调用与效果仍待验证。
+适配器支持兼容 `/chat/completions` 的服务，推荐接口只传衣物 ID、标签、场合和偏好；补拍指导接口只传确定性程序算出的客观质检 JSON，不上传个人照片。结构、未知 ID、禁用衣物及 `invalid_retake` 不可复用约束均由服务端独立校验。2026-11-22 已在本机完成 `deepseek-flash` 的服务端推荐（`Q04-ai`）与采集补拍指导（`POST /v1/capture/guide`）实测，详见 `docs/acceptance-record.md`。
 
 实际接入时由队长核实服务商文档并在本机配置：
 
@@ -87,9 +88,20 @@ mock 选择按偏好中的浅/白/亮、深/黑/暗、红/粉匹配已有标签�
 | OOTD_AI_BASE_URL | 服务商基础地址 |
 | OOTD_AI_API_KEY | 服务端凭据 |
 | OOTD_AI_MODEL | 服务商支持的模型名 |
-| OOTD_AI_TIMEOUT_SECONDS | 调用超时 |
+| OOTD_AI_TIMEOUT_SECONDS | 推荐调用超时（默认 12 秒） |
+| OOTD_CAPTURE_GUIDE_TIMEOUT_SECONDS | 补拍指导调用超时（默认 25 秒） |
 | OOTD_AI_MAX_CALLS_PER_DAY | 每日调用次数上限 |
 | OOTD_AI_MAX_CALLS_PER_MINUTE | 分钟级次数上限 |
 | OOTD_CALL_LOG | 本地调用记录路径 |
 
 成功调用且结果通过校验才返回 `mode=ai`。费用、供应商用量、响应耗时和推荐效果在真实验证时记录。
+
+### 采集质检与补拍指导演示脚本
+
+```powershell
+# 规则模式（默认 mock）
+& .\server\.venv\Scripts\python.exe server/tools/demo_capture_guide.py
+
+# 真实 AI 模式（需先在当前终端设置 OOTD_AI_MODE=ai 及对应接口/密钥/模型变量）
+& .\server\.venv\Scripts\python.exe server/tools/demo_capture_guide.py
+```

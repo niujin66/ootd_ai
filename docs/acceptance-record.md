@@ -6,11 +6,12 @@
 
 | 检查 | 实际结果 |
 | --- | --- |
-| Q05 后端自动化 | `.\server\.venv\Scripts\python.exe -m unittest discover -s server/tests -p "test_*.py" -v` 共执行 **81 项**，**80 通过、0 失败、1 跳过**（Windows 无符号链接权限跳过 `test_symlink_escape_rejected`），耗时 6.724 s；覆盖 R06 严格输出、R10 超时/额度及 502/503 错误映射。 |
+| Q05 后端自动化 | `.\server\.venv\Scripts\python.exe -m unittest discover -s server/tests -p "test_*.py"` 新增采集质检与补拍指导 10 项单测后，共执行 **91 项**，**90 通过、0 失败、1 跳过**（Windows 无符号链接权限跳过 `test_symlink_escape_rejected`），耗时 4.129 s；覆盖既有 81 项（R06/R10/502/503）及新增 `/v1/capture/guide`。 |
 | Q04-ai（有效选择 1：`q04-ai-01`） | 隔离导入 `fixture-face-03b` 后经 FastAPI `POST /v1/recommendations` 实测（模型 `deepseek-flash`）：输入「下午上课 / 优先浅色」→ HTTP 200，`status=ok`，`garment_id=top-001`，`mode=ai`，服务端耗时 1.5541 s（281 tokens），理由符合浅色短袖。 |
 | Q04-ai（有效选择 2：`q04-ai-02`） | 同环境输入「晚上聚会 / 优先深色」→ HTTP 200，`status=ok`，`garment_id=top-002`，`mode=ai`，服务端耗时 1.9276 s（301 tokens），理由符合深蓝翻领 POLO。 |
 | Q04-ai（无匹配：`q04-ai-03`） | 同环境输入「运动 / 优先红色或粉色」→ HTTP 200，`status=no_match`，`garment_id=null`，`mode=ai`，服务端耗时 3.3126 s（408 tokens），理由明确说明无红/粉色运动款衣物。 |
-| Q04-ai 端到端边界 | 真实模型服务端路径已通过；Android 真机在 `OOTD_AI_MODE=ai` 下的联调驱动换衣待后续真机时段一并复测。 |
+| 采集质检与补拍指导（`POST /v1/capture/guide`） | 运行 `server/tools/demo_capture_guide.py`（`OOTD_AI_MODE=ai`，`deepseek-flash`）：① 头部缺口样例（180° 覆盖、81° 翻滚、单眼 3 px、配准 8.8%）→ HTTP 200（8.455 s），判定 `invalid_retake`、`can_reuse_existing=false`，输出 4 条重拍步骤；② 服装缺口样例（缺 180°–240° 扇区、上下留白 21 px、连续性 0.291）→ HTTP 200（5.394 s），判定 `needs_reshoot`、`can_reuse_existing=true`，输出 4 条补拍步骤。 |
+| Q04-ai 端到端边界 | 真实模型服务端路径（推荐 + 补拍指导）均已通过；Android 真机在 `OOTD_AI_MODE=ai` 下的联调驱动换衣待后续真机时段一并复测。 |
 
 ## 2026-11-21 卫衣网格与 Android 复核
 

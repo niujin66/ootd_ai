@@ -11,8 +11,14 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Literal
 
 import db
+from capture_guide import (
+    analyze_capture_metrics,
+    create_capture_guide_from_env,
+    mock_capture_guide,
+)
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
@@ -49,6 +55,23 @@ class RecommendationRequest(BaseModel):
     catalog_version: str = Field(min_length=1)
     scene: str = Field(min_length=1)
     preference: str = Field(min_length=1)
+
+
+class CaptureGuideRequest(BaseModel):
+    request_id: str = Field(min_length=1)
+    target_type: Literal["head", "garment"]
+    subject_label: str = ""
+    covered_azimuth_deg: list[float] | None = None
+    azimuth_span_deg: float | None = Field(default=None, ge=0.0, le=360.0)
+    up_roll_median_deg: float | None = Field(default=None, ge=0.0, le=180.0)
+    min_margin_px: dict[str, int] | None = None
+    sharpness_p50: float | None = Field(default=None, ge=0.0)
+    orbit_continuity_min: float | None = Field(default=None, ge=0.0, le=1.0)
+    roi_detail_px: float | None = Field(default=None, ge=0.0)
+    has_scale_reference: bool | None = None
+    frame_count: int | None = Field(default=None, ge=1)
+    registered_frames: int | None = Field(default=None, ge=0)
+    missing_closeups: list[str] = Field(default_factory=list)
 
 
 ERROR_CODES = {
@@ -129,6 +152,7 @@ def create_app(
     assets_root=None,
     token: str | None = None,
     recommender=None,
+    capture_guide=None,
 ) -> FastAPI:
     """Create the FastAPI app.
 
@@ -319,6 +343,84 @@ def create_app(
                 "status": status,
                 "garment_id": garment_id,
                 "reason": reason,
+                "mode": response_mode,
+            }
+        finally:
+            conn.close()
+
+    @app.post("/v1/capture/guide", dependencies=[Depends(require_auth)])
+    def capture_guide_endpoint(body: CaptureGuideRequest):
+        diagnosis = analyze_capture_metrics(body.model_dump())
+        conn = db.connect(db_location)
+        try:
+            mode = os.environ.get("OOTD_AI_MODE", "mock").lower()
+            if mode == "mock":
+                guide = mock_capture_guide(diagnosis)
+                response_mode = "mock"
+            elif mode == "ai":
+                started = time.perf_counter()
+                try:
+                    engine = (
+                        capture_guide
+                        if capture_guide is not None
+                        else create_capture_guide_from_env()
+                    )
+                    daily_cap = int(os.environ.get("OOTD_AI_MAX_CALLS_PER_DAY", "1000"))
+                    minute_cap = int(os.environ.get("OOTD_AI_MAX_CALLS_PER_MINUTE", "30"))
+                    check_daily_cap(conn, time.strftime("%Y-%m-%d"), daily_cap)
+                    check_minute_cap(minute_window, time.time(), minute_cap)
+                    started = time.perf_counter()
+                    call = engine.generate(diagnosis)
+                except RecommenderTimeoutError as exc:
+                    entry = _log_entry(
+                        body.request_id, "timeout", None, str(exc),
+                        round(time.perf_counter() - started, 4),
+                    )
+                    entry["endpoint"] = "capture_guide"
+                    append_call_log(entry)
+                    raise HTTPException(503, f"补拍指导超时：{exc}")
+                except RecommenderUpstreamError as exc:
+                    entry = _log_entry(
+                        body.request_id, "upstream_error", None, str(exc),
+                        round(time.perf_counter() - started, 4),
+                    )
+                    entry["endpoint"] = "capture_guide"
+                    append_call_log(entry)
+                    raise HTTPException(503, f"模型服务不可用：{exc}")
+                except InvalidModelOutputError as exc:
+                    entry = _log_entry(
+                        body.request_id, "invalid_output", None, str(exc),
+                        round(time.perf_counter() - started, 4),
+                    )
+                    entry["endpoint"] = "capture_guide"
+                    append_call_log(entry)
+                    raise HTTPException(502, f"补拍指导输出校验失败：{exc}")
+                except RateLimitError as exc:
+                    raise HTTPException(503, str(exc))
+                except RecommenderError as exc:
+                    raise HTTPException(503, str(exc))
+                guide = {
+                    "summary": call.summary,
+                    "can_reuse_existing": call.can_reuse_existing,
+                    "steps": call.steps,
+                }
+                response_mode = "ai"
+                entry = _log_entry(
+                    body.request_id, diagnosis["readiness"], None, call.summary,
+                    call.latency_seconds, call.usage,
+                )
+                entry["endpoint"] = "capture_guide"
+                append_call_log(entry)
+            else:
+                raise HTTPException(503, f"未知 OOTD_AI_MODE：{mode}")
+
+            return {
+                "request_id": body.request_id,
+                "target_type": diagnosis["target_type"],
+                "subject_label": diagnosis["subject_label"],
+                "readiness": diagnosis["readiness"],
+                "diagnosis": diagnosis,
+                "guide": guide,
                 "mode": response_mode,
             }
         finally:
