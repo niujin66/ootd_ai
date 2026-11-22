@@ -40,6 +40,7 @@ class FaultHandler(BaseHTTPRequestHandler):
     token: str | None = None
     delay: float = 0.0
     recommend: str = "top-001"
+    force_409: bool = False
 
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -119,6 +120,19 @@ class FaultHandler(BaseHTTPRequestHandler):
         if not self._authed():
             self._send_json({"detail": "unauthorized"}, status=401)
             return
+        # 复现 E01「旧版本 409」：推荐接口直接回 version_conflict，与正式服务端错误体一致。
+        if self.force_409:
+            self._send_json(
+                {
+                    "error": {
+                        "code": "version_conflict",
+                        "message": "目录版本已过期：客户端 fixture-face-03b，当前 fixture-face-03",
+                        "request_id": "fault-request",
+                    }
+                },
+                status=409,
+            )
+            return
         # 延迟旧响应复现：先睡够时长再回，模拟网络慢。
         if self.delay > 0:
             time.sleep(self.delay)
@@ -179,6 +193,7 @@ def main():
     parser.add_argument("--delay", type=float, default=0.0, help="推荐接口延迟秒数（复现 E02）")
     parser.add_argument("--token", default=None, help="可选鉴权 token")
     parser.add_argument("--recommend", default="top-001", help="推荐接口固定返回的衣服，或 no_match")
+    parser.add_argument("--force-409", action="store_true", help="推荐接口直接返回 409 version_conflict（复现 E01）")
     args = parser.parse_args()
 
     root = Path(args.fixtures)
@@ -189,6 +204,7 @@ def main():
     FaultHandler.token = args.token
     FaultHandler.delay = args.delay
     FaultHandler.recommend = args.recommend
+    FaultHandler.force_409 = args.force_409
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), FaultHandler)
     print(f"故障注入服务已启动：http://127.0.0.1:{args.port}")
