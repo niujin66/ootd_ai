@@ -2,7 +2,7 @@
 
 ## 2026-11-22 T02 四视角真机预检（B 侧，待 A×C 判定）
 
-设备为 B 的 OPPO `25098PN5AC`（adb `fe474c80`，Android 17），被测包由 `c92c65f` 构建，SHA-256 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`，47,958,154 B。服务端为 `fixture-face-03b`，pose `pose-001`。
+设备为 B 的 Xiaomi 17 Pro（`25098PN5AC`，adb `fe474c80`，Android 17），被测包由 `c92c65f` 构建，SHA-256 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`，47,958,154 B。服务端为 `fixture-face-03b`，pose `pose-001`。
 
 **本节是 B 侧预检，不是验收判定。** 判定权在 A（@VowVole）× C（@uniquebugle-stack），判定栏留空。
 
@@ -55,7 +55,7 @@
 | 对象与环境 | 已有证据 | 待验项 |
 | --- | --- | --- |
 | 卫衣离线网格，第 45 轮 | 回读 GLB 得到 203,560 个顶点、396,240 面。帽缝两侧的同向边由 225 降至 74，单侧边仍有 92 条。[实验记录与文件指纹](garment-gaussian-mesh.md) | 衣身侧接缝、下摆原片边界及后续穿着适配 |
-| B，OPPO 25098PN5AC，PR #41 的 `c92c65f` | 重打包 APK 的 SHA-256 为 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`。字号 1.0 与 1.45 均能启动、恢复 `fixture-face-03` 并显示人物与衣物。1.45 下推荐卡片名称被截断。[B 的真机记录](https://github.com/niujin66/ootd_ai/pull/41#issuecomment-7041167205) | 同包 03b 四视角、第二件失败与中断恢复 |
+| B，Xiaomi 25098PN5AC，PR #41 的 `c92c65f` | 重打包 APK 的 SHA-256 为 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`。字号 1.0 与 1.45 均能启动、恢复 `fixture-face-03` 并显示人物与衣物。1.45 下推荐卡片名称被截断。[B 的真机记录](https://github.com/niujin66/ootd_ai/pull/41#issuecomment-7041167205) | 同包 03b 四视角、第二件失败与中断恢复 |
 | C，Android 17 / API 37 模拟器，`e5b6423` | 在故障服务上，E04 拒绝坏 GLB 并保留旧衣；X01 强停后断网冷启动，恢复 `fixture-face-03`，两衣可切换。[C 的复测记录](https://github.com/niujin66/ootd_ai/issues/1#issuecomment-7004290573) | C 用 B 的 APK 和正式服务独立跑真机；另在故障服务验证 E01–E03 与 X02 |
 
 ## 2026-11-19 卫衣高斯转网格实验
@@ -198,7 +198,7 @@ B 的 R01–R04 复核完了，结论是**先别合并**：`isValid()` 只看哈
 
 **真机复测（E04，2026-11-16 晚）**
 
-- 设备：OPPO `25098PN5AC`（`fe474c80`），APK 指向 `127.0.0.1:8003`，假后端 `--fixtures outputs/fault-fixtures/corrupt-glb`。
+- 设备：Xiaomi `25098PN5AC`（`fe474c80`），APK 指向 `127.0.0.1:8003`，假后端 `--fixtures outputs/fault-fixtures/corrupt-glb`。
 - 第一轮**没有通过**：只把探测挂在 `isValid()` 上，`sync()` 下载完只查了 size 和 sha256。结果坏包一路过：切目录 → 人物（好文件）上屏 → 衣物报 `Failed to parse glTF model from buffer` → 人物一变，`publishActive` 又把生效指针写成了 corrupt 版本。表现是标题变成 `服务端 · fixture-face-03-corrupt`、人物被换掉、衣服没了。**这正是复核意见第 1 条描述的场景，说明只修恢复侧不够。**
 - 补 `probeDecodable()`：下载每个资产后立刻探测，坏包在切目录之前就失败。
 - 第二轮**通过**，三个检查点逐条：
