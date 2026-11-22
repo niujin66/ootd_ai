@@ -1,5 +1,17 @@
 # 验收记录
 
+## 2026-11-22 后端回归与真实 AI 推荐验证（Q04-ai）
+
+本机基线 `main@9c3451d`，Windows / `server/.venv`（Python 3.12）。服务端代码相对 `80de331` 未改动，所有测试均在隔离临时数据库或默认单测环境执行，凭据仅通过临时环境变量注入，未写入仓库。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Q05 后端自动化 | `.\server\.venv\Scripts\python.exe -m unittest discover -s server/tests -p "test_*.py" -v` 共执行 **81 项**，**80 通过、0 失败、1 跳过**（Windows 无符号链接权限跳过 `test_symlink_escape_rejected`），耗时 6.724 s；覆盖 R06 严格输出、R10 超时/额度及 502/503 错误映射。 |
+| Q04-ai（有效选择 1：`q04-ai-01`） | 隔离导入 `fixture-face-03b` 后经 FastAPI `POST /v1/recommendations` 实测（模型 `deepseek-flash`）：输入「下午上课 / 优先浅色」→ HTTP 200，`status=ok`，`garment_id=top-001`，`mode=ai`，服务端耗时 1.5541 s（281 tokens），理由符合浅色短袖。 |
+| Q04-ai（有效选择 2：`q04-ai-02`） | 同环境输入「晚上聚会 / 优先深色」→ HTTP 200，`status=ok`，`garment_id=top-002`，`mode=ai`，服务端耗时 1.9276 s（301 tokens），理由符合深蓝翻领 POLO。 |
+| Q04-ai（无匹配：`q04-ai-03`） | 同环境输入「运动 / 优先红色或粉色」→ HTTP 200，`status=no_match`，`garment_id=null`，`mode=ai`，服务端耗时 3.3126 s（408 tokens），理由明确说明无红/粉色运动款衣物。 |
+| Q04-ai 端到端边界 | 真实模型服务端路径已通过；Android 真机在 `OOTD_AI_MODE=ai` 下的联调驱动换衣待后续真机时段一并复测。 |
+
 ## 2026-11-21 卫衣网格与 Android 复核
 
 | 对象与环境 | 已有证据 | 待验项 |
