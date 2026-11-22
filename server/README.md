@@ -99,9 +99,10 @@ mock 选择按偏好中的浅/白/亮、深/黑/暗、红/粉匹配已有标签�
 ### 采集质检与补拍指导演示脚本
 
 ```powershell
-# 规则模式（默认 mock）
+# 1) 使用预置样例直接演示 /v1/capture/guide（默认 mock，设环境变量可切 ai）
 & .\server\.venv\Scripts\python.exe server/tools/demo_capture_guide.py
 
-# 真实 AI 模式（需先在当前终端设置 OOTD_AI_MODE=ai 及对应接口/密钥/模型变量）
-& .\server\.venv\Scripts\python.exe server/tools/demo_capture_guide.py
+# 2) 从真实帧目录/视频或 COLMAP sparse/0 自动提取指标并调用补拍指导
+& .\server\.venv\Scripts\python.exe server/tools/analyze_capture.py `
+    --input <frames_dir_or_video> --target-type garment --call-guide
 ```
