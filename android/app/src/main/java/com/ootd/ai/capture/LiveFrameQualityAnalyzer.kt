@@ -42,6 +42,14 @@ data class SubjectFraming(
     val marginBottomPx: Int
 )
 
+enum class FramingStatus {
+    NOT_FOUND,
+    TOO_FAR,
+    GOOD,
+    TOO_CLOSE,
+    CROPPED
+}
+
 enum class CloseupCheckId(val label: String) {
     FACE_FRONT("正脸特写"),
     FACE_LEFT("左斜侧脸（-30°）"),
@@ -53,6 +61,8 @@ enum class CloseupCheckId(val label: String) {
 data class LiveQualitySnapshot(
     val stage: CaptureStage,
     val trafficLight: TrafficLight,
+    val framingStatus: FramingStatus,
+    val actionBadge: String,
     val promptText: String,
     val voiceHint: String?,
     val sharpness: Double,
@@ -206,7 +216,7 @@ class LiveFrameQualityAnalyzer(
             consecutiveBlurFrames == 0 &&
             (lostSubjectRatio() <= 0.25)
 
-        val (light, prompt, voiceKey) = decideFeedback(
+        val feedback = decideFeedback(
             orientation = orientation,
             sharpness = sharpness,
             ncc = ncc,
@@ -215,17 +225,19 @@ class LiveFrameQualityAnalyzer(
             stage1Ready = stage1Ready
         )
 
-        val voiceHint = if (voiceKey != null && voiceKey != lastVoiceKey) {
-            lastVoiceKey = voiceKey
-            prompt
+        val voiceHint = if (feedback.voiceKey != null && feedback.voiceKey != lastVoiceKey) {
+            lastVoiceKey = feedback.voiceKey
+            feedback.promptText
         } else {
             null
         }
 
         return LiveQualitySnapshot(
             stage = stage,
-            trafficLight = light,
-            promptText = prompt,
+            trafficLight = feedback.trafficLight,
+            framingStatus = feedback.framingStatus,
+            actionBadge = feedback.actionBadge,
+            promptText = feedback.promptText,
             voiceHint = voiceHint,
             sharpness = sharpness,
             continuityNcc = ncc,
@@ -342,6 +354,40 @@ class LiveFrameQualityAnalyzer(
         return estimateSubjectBounds(frame)
     }
 
+    private data class FeedbackDecision(
+        val trafficLight: TrafficLight,
+        val framingStatus: FramingStatus,
+        val actionBadge: String,
+        val promptText: String,
+        val voiceKey: String?
+    )
+
+    private fun computeFramingStatus(framing: SubjectFraming): FramingStatus {
+        if (!framing.detected) return FramingStatus.NOT_FOUND
+        if (framing.occupancy > OCCUPANCY_MAX_LIMIT) return FramingStatus.TOO_CLOSE
+        val minCheckedMargin = if (targetType == CaptureTargetType.HEAD) {
+            minOf(framing.marginLeftPx, framing.marginRightPx, framing.marginTopPx)
+        } else {
+            minOf(framing.marginLeftPx, framing.marginRightPx, framing.marginTopPx, framing.marginBottomPx)
+        }
+        if (minCheckedMargin < MARGIN_MIN_PX) return FramingStatus.CROPPED
+        if (framing.occupancy < 0.30) return FramingStatus.TOO_FAR
+        return FramingStatus.GOOD
+    }
+
+    private fun suggestWalkDirection(orientation: OrientationSnapshot?): String {
+        if (orientation == null) return "向右缓慢绕行"
+        val cur = orientation.currentSectorIndex
+        val covered = orientation.coveredSectors
+        for (step in 1..OrientationSectorTracker.SECTOR_COUNT / 2) {
+            val cw = (cur + step) % OrientationSectorTracker.SECTOR_COUNT
+            if (!covered[cw]) return "继续向右缓慢绕行"
+            val ccw = (cur - step + OrientationSectorTracker.SECTOR_COUNT) % OrientationSectorTracker.SECTOR_COUNT
+            if (!covered[ccw]) return "向左补几步缺失方向"
+        }
+        return "保持节奏绕完剩余角度"
+    }
+
     private fun decideFeedback(
         orientation: OrientationSnapshot?,
         sharpness: Double,
@@ -349,75 +395,159 @@ class LiveFrameQualityAnalyzer(
         framing: SubjectFraming,
         eyeDistPx: Double?,
         stage1Ready: Boolean
-    ): Triple<TrafficLight, String, String?> {
+    ): FeedbackDecision {
+        val framingStatus = computeFramingStatus(framing)
+
         if (consecutiveBlurFrames >= 3) {
-            return Triple(TrafficLight.RED, "画面模糊，请放慢移动速度并稳住手机", "blur")
+            return FeedbackDecision(
+                trafficLight = TrafficLight.RED,
+                framingStatus = framingStatus,
+                actionBadge = "稳住放慢",
+                promptText = "画面有点模糊！请放慢走动速度，双手拿稳手机先停半秒对焦",
+                voiceKey = "blur"
+            )
         }
         if (orientation != null && orientation.isRollWarning) {
-            return Triple(TrafficLight.YELLOW, "请保持手机端平（当前倾斜 ${abs(orientation.rollDeg).roundToInt()}°）", "roll")
+            val tiltHint = if (orientation.rollDeg > 0) "往左扶正手机" else "往右扶正手机"
+            return FeedbackDecision(
+                trafficLight = TrafficLight.YELLOW,
+                framingStatus = framingStatus,
+                actionBadge = tiltHint,
+                promptText = "手机拿歪了（斜了 ${abs(orientation.rollDeg).roundToInt()}°），请$tiltHint，让水平仪气泡回中间",
+                voiceKey = "roll"
+            )
         }
         if (ncc != null && ncc < CONTINUITY_MIN_THRESHOLD) {
-            return Triple(TrafficLight.YELLOW, "移动过快，请匀速缓慢环绕", "fast")
+            return FeedbackDecision(
+                trafficLight = TrafficLight.YELLOW,
+                framingStatus = framingStatus,
+                actionBadge = "走太快了",
+                promptText = "移动太快了！请像慢动作一样匀速挪步，别一下子晃太快",
+                voiceKey = "fast"
+            )
         }
 
         if (stage == CaptureStage.STAGE_1_OVERVIEW) {
             if (!framing.detected) {
-                return Triple(TrafficLight.RED, "未检测到完整主体，请将目标移回画面中央", "lost")
+                val targetWord = if (targetType == CaptureTargetType.HEAD) "人头和肩膀" else "整件衣服"
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.RED,
+                    framingStatus = FramingStatus.NOT_FOUND,
+                    actionBadge = "对准虚线框",
+                    promptText = "画面里没找到目标，请把${targetWord}移到屏幕中央虚线框里",
+                    voiceKey = "lost"
+                )
             }
             if (framing.occupancy > OCCUPANCY_MAX_LIMIT) {
-                return Triple(TrafficLight.RED, "距离过近（占比 ${(framing.occupancy * 100).roundToInt()}%），请后退半步", "too_close")
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.RED,
+                    framingStatus = FramingStatus.TOO_CLOSE,
+                    actionBadge = "往后退一大步",
+                    promptText = "太近了！请往后退一大步（约 1.2–1.5 米），别让目标顶满屏幕",
+                    voiceKey = "too_close"
+                )
             }
-            val minCheckedMargin = if (targetType == CaptureTargetType.HEAD) {
-                minOf(framing.marginLeftPx, framing.marginRightPx, framing.marginTopPx)
-            } else {
-                minOf(framing.marginLeftPx, framing.marginRightPx, framing.marginTopPx, framing.marginBottomPx)
-            }
-            if (minCheckedMargin < MARGIN_MIN_PX) {
-                val tip = if (targetType == CaptureTargetType.HEAD) "头顶或耳侧贴边" else "衣物边缘贴边"
-                return Triple(TrafficLight.YELLOW, "${tip}（留白 ${minCheckedMargin}px < 40px），请略微后退", "margin")
+            if (framingStatus == FramingStatus.CROPPED) {
+                val tip = if (targetType == CaptureTargetType.HEAD) "头顶或耳朵快出画了" else "衣服边缘快被切掉了"
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = FramingStatus.CROPPED,
+                    actionBadge = "退半步留边",
+                    promptText = "${tip}，请稍微后退半步，让虚线框四周留出空隙",
+                    voiceKey = "margin"
+                )
             }
             if (stage1Ready) {
-                return Triple(
-                    TrafficLight.GREEN,
-                    "远景扇区已达标！请被拍人保持不动，点击“进入推近阶段”慢推补细节",
-                    "stage1_ready"
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = framingStatus,
+                    actionBadge = "外圈已达标 ✓",
+                    promptText = "第 1 步外圈绕拍已达标！不要停录，让被拍人别动，点右下角绿色按钮进入「第 2 步推近」",
+                    voiceKey = "stage1_ready"
                 )
             }
             val count = orientation?.coveredCount ?: 0
-            val hint = if (framing.occupancy in 0.35..0.55) {
-                "距离合适！匀速围绕点亮扇区（已完成 $count/12）"
-            } else if (framing.occupancy < 0.35) {
-                "主体略小，可稍微走近半步并绕行（已完成 $count/12）"
+            val dirHint = suggestWalkDirection(orientation)
+            return if (framingStatus == FramingStatus.TOO_FAR) {
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.TOO_FAR,
+                    actionBadge = "往前走一两步",
+                    promptText = "目标略远，可稍微走近一两步装满虚线框，同时$dirHint（$count/12 格）",
+                    voiceKey = null
+                )
             } else {
-                "稳住距离，缓慢围绕主体点亮扇区（已完成 $count/12）"
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.GOOD,
+                    actionBadge = "$dirHint ($count/12)",
+                    promptText = "距离刚刚好！被拍人站着别动，你稳住手机$dirHint（已点亮 $count/12 格）",
+                    voiceKey = null
+                )
             }
-            return Triple(TrafficLight.GREEN, hint, null)
         }
 
-        // Stage 2：慢推近补细节
+        // Stage 2：一镜慢推近补细节
         if (targetType == CaptureTargetType.HEAD) {
             if (eyeDistPx == null) {
-                return Triple(TrafficLight.YELLOW, "正处于阶段 2，请将镜头缓慢对准面部不要停顿", "stage2_no_face")
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = framingStatus,
+                    actionBadge = "对准面部",
+                    promptText = "第 2 步推近：请把镜头对准人脸中央，让被拍人保持不动，慢慢往前凑近",
+                    voiceKey = "stage2_no_face"
+                )
             }
             if (eyeDistPx < EYE_DETAIL_TARGET_PX) {
-                return Triple(
-                    TrafficLight.YELLOW,
-                    "请再慢慢靠近些（当前眼部 ${eyeDistPx.roundToInt()}px，目标 ≥20px）",
-                    "stage2_closer"
+                return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = framingStatus,
+                    actionBadge = "继续慢慢凑近",
+                    promptText = "还不够近！请继续慢慢往前推近到距离面部约 40 厘米（眼部像素 ${eyeDistPx.roundToInt()}/20）",
+                    voiceKey = "stage2_closer"
                 )
             }
             val missing = computeMissingCloseups()
             return if (missing.isEmpty()) {
-                Triple(TrafficLight.GREEN, "阶段 2 正/左/右面部特写全部达标！可点击完成并质检", "stage2_done")
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.GOOD,
+                    actionBadge = "特写全达标 ✓",
+                    promptText = "正脸与左右侧脸高清特写全部采齐！现在可以点「完成录制并出指导」",
+                    voiceKey = "stage2_done"
+                )
             } else {
-                Triple(TrafficLight.GREEN, "眼部清晰达标（${eyeDistPx.roundToInt()}px），请缓慢微转补拍：${missing.first()}", "stage2_next_${missing.first()}")
+                val nextAngleHint = when (missing.first()) {
+                    CloseupCheckId.FACE_FRONT.label -> "先对准正脸停稳 1 秒"
+                    CloseupCheckId.FACE_LEFT.label -> "被拍人别动！你拿着手机往左移动一小步拍左斜侧脸"
+                    else -> "被拍人别动！你拿着手机往右移动一小步拍右斜侧脸"
+                }
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.GOOD,
+                    actionBadge = "去拍：${missing.first()}",
+                    promptText = "距离清晰度都很好！下一步：$nextAngleHint",
+                    voiceKey = "stage2_next_${missing.first()}"
+                )
             }
         } else {
             val missing = computeMissingCloseups()
             return if (missing.isEmpty()) {
-                Triple(TrafficLight.GREEN, "衣物领口与纹理特写已完成！可点击完成并质检", "stage2_garment_done")
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.GOOD,
+                    actionBadge = "特写全达标 ✓",
+                    promptText = "领口与面料纹理细节已采清！现在可以点「完成录制并出指导」",
+                    voiceKey = "stage2_garment_done"
+                )
             } else {
-                Triple(TrafficLight.GREEN, "保持手机缓慢推近领口/袖口（建议 30–50 cm）", null)
+                FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.GOOD,
+                    actionBadge = "慢推领口/袖口",
+                    promptText = "第 2 步推近：保持衣物固定不动，镜头慢慢靠近领口与袖口约 30–50 厘米拍清纹理（也可手动点选已拍项）",
+                    voiceKey = null
+                )
             }
         }
     }

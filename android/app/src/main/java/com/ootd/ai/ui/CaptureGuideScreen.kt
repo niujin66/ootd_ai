@@ -36,10 +36,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,6 +58,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,14 +69,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -83,13 +88,16 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.ootd.ai.BuildConfig
 import com.ootd.ai.capture.CameraXFrameAnalyzer
+import com.ootd.ai.capture.CaptureDebugConfig
+import com.ootd.ai.capture.CaptureDebugPrefs
 import com.ootd.ai.capture.CaptureGuideApi
-import com.ootd.ai.capture.CaptureGuideRequest
 import com.ootd.ai.capture.CaptureGuideResponse
 import com.ootd.ai.capture.CapturePrepConfig
 import com.ootd.ai.capture.CaptureStage
 import com.ootd.ai.capture.CaptureTargetType
 import com.ootd.ai.capture.CloseupCheckId
+import com.ootd.ai.capture.DirectDeepSeekCaptureGuide
+import com.ootd.ai.capture.FramingStatus
 import com.ootd.ai.capture.LiveFrameQualityAnalyzer
 import com.ootd.ai.capture.LiveQualitySnapshot
 import com.ootd.ai.capture.OfflineCaptureDiagnoser
@@ -113,10 +121,10 @@ import kotlin.math.sin
 
 /**
  * 两段式实时采集引导页面：
- * 1. 开拍前准备：声明目标类型（head / garment）、可选身高/性别与尺度参考标记；
- * 2. 阶段 1 远景环绕：12 扇区打卡环 + 水平仪条 + 占屏比/边距/模糊/速度实时红绿灯；
- * 3. 阶段 2 一镜慢推近：不中断录像，引导靠近补齐面部眼距 ≥20px 或衣物细节特写；
- * 4. 结束质检：保存录像并请求 POST /v1/capture/guide，异常时本地离线降级 + 语音播报 + 一键缺口重拍。
+ * 1. 开拍前准备：3 步图解说明 + 目标/尺度声明 + 可折叠开发者直连 DeepSeek 调试开关；
+ * 2. 阶段 1 远景环绕：中央虚线安全取景框 + 右上角紧凑 12 扇区罗盘 + 水平仪 + 大白话行动指示；
+ * 3. 阶段 2 一镜慢推近：不中断录像，引导凑近面部或领口/袖口补齐高清细节；
+ * 4. 结束质检：保存录像，按调试配置直连 DeepSeek 或请求后端 /v1/capture/guide，异常时离线降级。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -147,6 +155,7 @@ fun CaptureGuideScreen(
     }
 
     var prepConfig by remember { mutableStateOf(CapturePrepConfig()) }
+    var debugConfig by remember { mutableStateOf(CaptureDebugPrefs.load(context)) }
     var stage by remember { mutableStateOf(CaptureStage.PREPARE) }
     var voiceEnabled by remember { mutableStateOf(true) }
     var targetGapSectors by remember { mutableStateOf<Set<Int>>(emptySet()) }
@@ -164,14 +173,13 @@ fun CaptureGuideScreen(
     var guideResult by remember { mutableStateOf<CaptureGuideResponse?>(null) }
     var analyzeStatusText by remember { mutableStateOf("正在汇总轨迹与清晰度指标…") }
 
-    // CameraX 控制器与录像状态
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var activeRecording by remember { mutableStateOf<Recording?>(null) }
+    var pendingRecordStart by remember { mutableStateOf(false) }
     var cameraBindError by remember { mutableStateOf<String?>(null) }
 
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
 
-    // TextToSpeech 用于实时语音提醒及结果卡片播报
     val ttsHolder = remember { mutableStateOf<TextToSpeech?>(null) }
     var ttsReady by remember { mutableStateOf(false) }
 
@@ -200,42 +208,7 @@ fun CaptureGuideScreen(
         ttsHolder.value?.speak(text, queueMode, null, "ootd_hint_${System.currentTimeMillis()}")
     }
 
-    // 传感器仅在拍摄阶段启用，离开界面时安全注销
-    val isCapturing = stage == CaptureStage.STAGE_1_OVERVIEW || stage == CaptureStage.STAGE_2_CLOSEUP
-    DisposableEffect(isCapturing) {
-        if (!isCapturing) {
-            onDispose { }
-        } else {
-            val bridge = RotationSensorBridge(context, tracker) { snap ->
-                orientationSnapshot = snap
-            }
-            bridge.start()
-            onDispose {
-                bridge.stop()
-            }
-        }
-    }
-
-    // 播报关键状态切换与纠偏提示（节流由 LiveFrameQualityAnalyzer.voiceHint 控制）
-    LaunchedEffect(qualitySnapshot?.voiceHint) {
-        val hint = qualitySnapshot?.voiceHint ?: return@LaunchedEffect
-        if (isCapturing) {
-            speakHint(hint, flush = true)
-        }
-    }
-
-    fun startRecordingSession(gapIndices: Set<Int> = emptySet()) {
-        tracker.reset()
-        analyzer = LiveFrameQualityAnalyzer(prepConfig.targetType)
-        orientationSnapshot = tracker.currentSnapshot()
-        qualitySnapshot = null
-        savedVideoUri = null
-        recordError = null
-        guideResult = null
-        targetGapSectors = gapIndices
-        stage = CaptureStage.STAGE_1_OVERVIEW
-
-        val vc = videoCapture ?: return
+    fun beginMediaStoreRecording(vc: VideoCapture<Recorder>) {
         val name = "OOTD_${prepConfig.targetType.apiValue}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -267,14 +240,62 @@ fun CaptureGuideScreen(
         }.onFailure { err ->
             recordError = "录像启动异常（${err.message}），已继续使用实时质量指导"
         }
-        speakHint("开始第一阶段，请围绕目标缓慢环绕一圈", flush = true)
+    }
+
+    val isCapturing = stage == CaptureStage.STAGE_1_OVERVIEW || stage == CaptureStage.STAGE_2_CLOSEUP
+    DisposableEffect(isCapturing) {
+        if (!isCapturing) {
+            onDispose { }
+        } else {
+            val bridge = RotationSensorBridge(context, tracker) { snap ->
+                orientationSnapshot = snap
+            }
+            bridge.start()
+            onDispose {
+                bridge.stop()
+            }
+        }
+    }
+
+    LaunchedEffect(qualitySnapshot?.voiceHint) {
+        val hint = qualitySnapshot?.voiceHint ?: return@LaunchedEffect
+        if (isCapturing) {
+            speakHint(hint, flush = true)
+        }
+    }
+
+    fun startRecordingSession(gapIndices: Set<Int> = emptySet()) {
+        tracker.reset()
+        analyzer = LiveFrameQualityAnalyzer(prepConfig.targetType)
+        orientationSnapshot = tracker.currentSnapshot()
+        qualitySnapshot = null
+        savedVideoUri = null
+        recordError = null
+        guideResult = null
+        targetGapSectors = gapIndices
+        pendingRecordStart = true
+        stage = CaptureStage.STAGE_1_OVERVIEW
+
+        val vc = videoCapture
+        if (vc != null) {
+            pendingRecordStart = false
+            beginMediaStoreRecording(vc)
+        }
+        speakHint("第 1 步，退远一点把目标装进虚线框，然后向右缓慢绕一圈", flush = true)
     }
 
     fun finishAndInspect() {
+        pendingRecordStart = false
         runCatching { activeRecording?.stop() }
         activeRecording = null
         stage = CaptureStage.ANALYZING
-        analyzeStatusText = "正在汇总两阶段指标并请求 AI 质检指引…"
+
+        val useDirectDeepSeek = debugConfig.directDeepSeekEnabled && debugConfig.deepSeekApiKey.isNotBlank()
+        analyzeStatusText = if (useDirectDeepSeek) {
+            "正在本地整理质检数据，并直连 DeepSeek 生成补拍指南…"
+        } else {
+            "正在汇总两阶段指标并请求 AI 质检指引…"
+        }
 
         val req = analyzer.buildGuideRequest(
             requestId = "android-${UUID.randomUUID().toString().take(8)}",
@@ -285,11 +306,19 @@ fun CaptureGuideScreen(
         coroutineScope.launch {
             val response = withContext(Dispatchers.IO) {
                 runCatching {
-                    val api = CaptureGuideApi(
-                        baseUrl = BuildConfig.OOTD_API_BASE_URL,
-                        authToken = BuildConfig.OOTD_API_TOKEN
-                    )
-                    api.requestGuide(req)
+                    if (useDirectDeepSeek) {
+                        DirectDeepSeekCaptureGuide(
+                            baseUrl = debugConfig.deepSeekBaseUrl.ifBlank { CaptureDebugConfig.DEFAULT_DEEPSEEK_BASE_URL },
+                            apiKey = debugConfig.deepSeekApiKey,
+                            model = debugConfig.deepSeekModel.ifBlank { CaptureDebugConfig.DEFAULT_DEEPSEEK_MODEL }
+                        ).generateGuide(req)
+                    } else {
+                        val serverUrl = debugConfig.customServerBaseUrl.ifBlank { BuildConfig.OOTD_API_BASE_URL }
+                        CaptureGuideApi(
+                            baseUrl = serverUrl,
+                            authToken = BuildConfig.OOTD_API_TOKEN
+                        ).requestGuide(req)
+                    }
                 }.getOrElse { err ->
                     OfflineCaptureDiagnoser.buildFallback(
                         request = req,
@@ -319,7 +348,12 @@ fun CaptureGuideScreen(
             CaptureStage.PREPARE -> {
                 PrepareCaptureContent(
                     config = prepConfig,
+                    debugConfig = debugConfig,
                     onConfigChange = { prepConfig = it },
+                    onDebugConfigChange = { updated ->
+                        debugConfig = updated
+                        CaptureDebugPrefs.save(context, updated)
+                    },
                     onStartCapture = { startRecordingSession() },
                     onBack = onBack
                 )
@@ -334,29 +368,27 @@ fun CaptureGuideScreen(
                         analyzer = analyzer,
                         targetTypeProvider = { prepConfig.targetType },
                         orientationProvider = { orientationSnapshot },
-                        onVideoCaptureReady = { vc -> videoCapture = vc },
+                        onVideoCaptureReady = { vc ->
+                            videoCapture = vc
+                            if (pendingRecordStart && activeRecording == null) {
+                                pendingRecordStart = false
+                                beginMediaStoreRecording(vc)
+                            }
+                        },
                         onBindError = { msg -> cameraBindError = msg },
                         onQualitySnapshot = { snap -> qualitySnapshot = snap }
                     )
 
-                    // 中心 12 扇区打卡环 + 水平仪条叠加层
-                    SectorAndLevelOverlay(
-                        orientation = orientationSnapshot,
-                        targetGapSectors = targetGapSectors,
-                        trafficLight = qualitySnapshot?.trafficLight ?: TrafficLight.GREEN,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(bottom = 120.dp)
-                    )
-
-                    // 顶部阶段条与静音开关
+                    // 顶部：返回、3步流程进度条、12扇区紧凑罗盘与静音开关
                     TopCaptureHud(
                         stage = stage,
                         orientation = orientationSnapshot,
+                        targetGapSectors = targetGapSectors,
+                        snapshot = qualitySnapshot,
                         voiceEnabled = voiceEnabled,
-                        targetGapCount = targetGapSectors.size,
                         onToggleVoice = { voiceEnabled = !voiceEnabled },
                         onBack = {
+                            pendingRecordStart = false
                             runCatching { activeRecording?.stop() }
                             activeRecording = null
                             stage = CaptureStage.PREPARE
@@ -365,26 +397,31 @@ fun CaptureGuideScreen(
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
                             .statusBarsPadding()
-                            .padding(12.dp)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
                     )
 
-                    // 底部红绿灯指引、核心参数与两阶段切换按钮
+                    // 中央：不遮挡脸部的虚线安全取景框 + 醒目行动指令徽章 + 细长水平仪
+                    SafeFramingGuideOverlay(
+                        stage = stage,
+                        targetType = prepConfig.targetType,
+                        orientation = orientationSnapshot,
+                        snapshot = qualitySnapshot,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(bottom = 110.dp)
+                    )
+
+                    // 底部：大白话实时提示、三项状态速览与两阶段按钮
                     BottomCapturePanel(
                         stage = stage,
                         targetType = prepConfig.targetType,
+                        orientation = orientationSnapshot,
                         snapshot = qualitySnapshot,
                         cameraBindError = cameraBindError,
                         onAdvanceToStage2 = {
                             analyzer.enterStage2Closeup()
                             stage = CaptureStage.STAGE_2_CLOSEUP
-                            speakHint("进入阶段二，请被拍人保持不动，镜头慢慢向前推近", flush = true)
-                        },
-                        onBackToStage1 = {
-                            analyzer.reset(CaptureStage.STAGE_1_OVERVIEW)
-                            stage = CaptureStage.STAGE_1_OVERVIEW
-                        },
-                        onToggleManualCloseup = { checkId ->
-                            analyzer.markCloseupCompleted(checkId)
+                            speakHint("第 2 步！被拍人像雕塑一样别动，镜头慢慢凑近到 40 厘米拍正脸和侧脸", flush = true)
                         },
                         onFinish = { finishAndInspect() },
                         modifier = Modifier
@@ -527,40 +564,135 @@ private fun CameraPreviewAndAnalyzer(
 }
 
 @Composable
-private fun SectorAndLevelOverlay(
+private fun TopCaptureHud(
+    stage: CaptureStage,
     orientation: OrientationSnapshot,
     targetGapSectors: Set<Int>,
-    trafficLight: TrafficLight,
+    snapshot: LiveQualitySnapshot?,
+    voiceEnabled: Boolean,
+    onToggleVoice: () -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val ringTint = when (trafficLight) {
-        TrafficLight.GREEN -> Color(0xFF2E7D32)
-        TrafficLight.YELLOW -> Color(0xFFF9A825)
-        TrafficLight.RED -> Color(0xFFC62828)
-    }
     Column(
         modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.clickable(onClick = onBack)
+            ) {
+                Text(
+                    text = "返回",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+
+            // 3 步流程进度指示条，一眼看清当前在哪一步
+            val stepNum = when {
+                stage == CaptureStage.STAGE_2_CLOSEUP -> 3
+                snapshot?.framingStatus == FramingStatus.GOOD && orientation.coveredCount >= 1 -> 2
+                else -> 1
+            }
+            Surface(
+                color = Color.Black.copy(alpha = 0.68f),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StepPill("①对齐", active = stepNum == 1, done = stepNum > 1)
+                    Text("→", color = Color.White.copy(alpha = 0.55f), style = MaterialTheme.typography.labelSmall)
+                    StepPill("②绕圈", active = stepNum == 2, done = stepNum > 2)
+                    Text("→", color = Color.White.copy(alpha = 0.55f), style = MaterialTheme.typography.labelSmall)
+                    StepPill("③推近", active = stepNum == 3, done = false)
+                }
+            }
+
+            Surface(
+                color = if (voiceEnabled) Color(0xFF1B5E20).copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.clickable(onClick = onToggleVoice)
+            ) {
+                Text(
+                    text = if (voiceEnabled) "语音开" else "已静音",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        // 右上角紧凑型 12 扇区罗盘（不再挡在屏幕正中间）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            CompactSectorCompass(
+                orientation = orientation,
+                targetGapSectors = targetGapSectors
+            )
+        }
+    }
+}
+
+@Composable
+private fun StepPill(label: String, active: Boolean, done: Boolean) {
+    val color = when {
+        done -> Color(0xFF81C784)
+        active -> Color(0xFFFFD54F)
+        else -> Color.White.copy(alpha = 0.55f)
+    }
+    Text(
+        text = if (done) "✓$label" else label,
+        color = color,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun CompactSectorCompass(
+    orientation: OrientationSnapshot,
+    targetGapSectors: Set<Int>
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.58f),
+        shape = RoundedCornerShape(16.dp)
     ) {
         Box(
-            modifier = Modifier.size(220.dp),
+            modifier = Modifier
+                .padding(8.dp)
+                .size(76.dp),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val stroke = 14.dp.toPx()
+                val stroke = 7.dp.toPx()
                 val inset = stroke / 2f
                 val arcSize = Size(size.width - stroke, size.height - stroke)
                 val topLeft = Offset(inset, inset)
 
                 for (sector in 0 until OrientationSectorTracker.SECTOR_COUNT) {
-                    val startAngle = -90f + sector * 30f + 2f
-                    val sweep = 26f
+                    val startAngle = -90f + sector * 30f + 2.5f
+                    val sweep = 25f
                     val isCovered = orientation.coveredSectors[sector]
                     val isTargetGap = sector in targetGapSectors && !isCovered
                     val color = when {
                         isCovered -> Color(0xFF4CAF50)
                         isTargetGap -> Color(0xFFFFB300)
-                        else -> Color.White.copy(alpha = 0.28f)
+                        else -> Color.White.copy(alpha = 0.25f)
                     }
                     drawArc(
                         color = color,
@@ -573,57 +705,142 @@ private fun SectorAndLevelOverlay(
                     )
                 }
 
-                // 当前方位指针
                 val rad = ((orientation.relativeAzimuthDeg - 90.0) * PI / 180.0).toFloat()
                 val radius = (size.minDimension - stroke) / 2f
                 val cx = size.width / 2f
                 val cy = size.height / 2f
-                val dotCenter = Offset(
-                    cx + cos(rad) * radius,
-                    cy + sin(rad) * radius
-                )
                 drawCircle(
                     color = Color.Cyan,
-                    radius = 7.dp.toPx(),
-                    center = dotCenter
+                    radius = 4.dp.toPx(),
+                    center = Offset(cx + cos(rad) * radius, cy + sin(rad) * radius)
                 )
             }
-
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "${orientation.coveredCount}/12",
                     color = Color.White,
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "${orientation.relativeAzimuthDeg.roundToInt()}°",
-                    color = Color.White.copy(alpha = 0.85f),
-                    style = MaterialTheme.typography.bodySmall
+                    text = "已转格数",
+                    color = Color.White.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SafeFramingGuideOverlay(
+    stage: CaptureStage,
+    targetType: CaptureTargetType,
+    orientation: OrientationSnapshot,
+    snapshot: LiveQualitySnapshot?,
+    modifier: Modifier = Modifier
+) {
+    val light = snapshot?.trafficLight ?: TrafficLight.GREEN
+    val guideColor = when (light) {
+        TrafficLight.GREEN -> Color(0xFF69F0AE)
+        TrafficLight.YELLOW -> Color(0xFFFFD54F)
+        TrafficLight.RED -> Color(0xFFFF5252)
+    }
+    val actionBadge = snapshot?.actionBadge ?: if (stage == CaptureStage.STAGE_1_OVERVIEW) {
+        "把目标放进虚线框里"
+    } else {
+        "慢慢凑近拍特写"
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // 醒目行动指令标签
+        Surface(
+            color = guideColor.copy(alpha = 0.92f),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Text(
+                text = "👉 $actionBadge",
+                color = Color.Black,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+
+        // 中央透明虚线取景框：让人直观知道站多远、目标装多大合适
+        val boxW = if (stage == CaptureStage.STAGE_1_OVERVIEW) 210.dp else 250.dp
+        val boxH = if (stage == CaptureStage.STAGE_1_OVERVIEW) 265.dp else 285.dp
+        Box(
+            modifier = Modifier.size(width = boxW, height = boxH),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 2.5.dp.toPx()
+                val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f), 0f)
+                drawRoundRect(
+                    color = guideColor.copy(alpha = 0.85f),
+                    topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
+                    size = Size(size.width - strokeWidth, size.height - strokeWidth),
+                    cornerRadius = CornerRadius(24.dp.toPx(), 24.dp.toPx()),
+                    style = Stroke(width = strokeWidth, pathEffect = dash)
+                )
+                if (targetType == CaptureTargetType.HEAD && stage == CaptureStage.STAGE_1_OVERVIEW) {
+                    // 头部阶段 1 画一个轻轮廓提示大概大小
+                    drawOval(
+                        color = Color.White.copy(alpha = 0.25f),
+                        topLeft = Offset(size.width * 0.22f, size.height * 0.10f),
+                        size = Size(size.width * 0.56f, size.height * 0.58f),
+                        style = Stroke(width = 1.5.dp.toPx(), pathEffect = dash)
+                    )
+                }
+            }
+            Surface(
+                color = Color.Black.copy(alpha = 0.52f),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                val boxCaption = when {
+                    stage == CaptureStage.STAGE_2_CLOSEUP && targetType == CaptureTargetType.HEAD ->
+                        "凑近到 ~40cm · 依次拍正/左/右脸"
+                    stage == CaptureStage.STAGE_2_CLOSEUP ->
+                        "凑近到 30–50cm · 拍清领口和纹理"
+                    targetType == CaptureTargetType.HEAD ->
+                        "退到 1.2–1.5m · 头肩完整留在框内"
+                    else ->
+                        "把整件衣服装进框 · 四边留空隙"
+                }
+                Text(
+                    text = boxCaption,
+                    color = Color.White.copy(alpha = 0.9f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // 水平仪条（±20° 为绿色安全区间）
+        // 水平仪气泡条
         Surface(
-            color = Color.Black.copy(alpha = 0.55f),
+            color = Color.Black.copy(alpha = 0.58f),
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier
-                .border(1.dp, ringTint.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
-                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .border(1.dp, if (orientation.isRollWarning) Color(0xFFFF5252) else Color(0xFF69F0AE).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 12.dp, vertical = 5.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "水平仪 ${orientation.rollDeg.roundToInt()}°",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium
+                    text = if (orientation.isRollWarning) "机歪了 ${abs(orientation.rollDeg).roundToInt()}°" else "水平仪 ✓",
+                    color = if (orientation.isRollWarning) Color(0xFFFF8A80) else Color(0xFF69F0AE),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Canvas(modifier = Modifier.size(width = 110.dp, height = 14.dp)) {
+                Canvas(modifier = Modifier.size(width = 100.dp, height = 12.dp)) {
                     val midX = size.width / 2f
                     val midY = size.height / 2f
                     drawLine(
@@ -633,7 +850,6 @@ private fun SectorAndLevelOverlay(
                         strokeWidth = 3.dp.toPx(),
                         cap = StrokeCap.Round
                     )
-                    // 安全区标线
                     drawLine(
                         color = Color(0xFF4CAF50).copy(alpha = 0.65f),
                         start = Offset(midX - size.width * 0.22f, midY),
@@ -642,72 +858,13 @@ private fun SectorAndLevelOverlay(
                         cap = StrokeCap.Round
                     )
                     val normRoll = (orientation.rollDeg / 45.0).coerceIn(-1.0, 1.0).toFloat()
-                    val bubbleX = midX + normRoll * (size.width * 0.44f)
                     drawCircle(
                         color = if (orientation.isRollWarning) Color(0xFFFF5252) else Color(0xFF69F0AE),
-                        radius = 5.dp.toPx(),
-                        center = Offset(bubbleX, midY)
+                        radius = 4.5.dp.toPx(),
+                        center = Offset(midX + normRoll * (size.width * 0.44f), midY)
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun TopCaptureHud(
-    stage: CaptureStage,
-    orientation: OrientationSnapshot,
-    voiceEnabled: Boolean,
-    targetGapCount: Int,
-    onToggleVoice: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.65f),
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.clickable(onClick = onBack)
-        ) {
-            Text(
-                text = "返回",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-            )
-        }
-
-        Surface(
-            color = Color.Black.copy(alpha = 0.65f),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            val badge = if (targetGapCount > 0) " · 缺口补拍" else ""
-            Text(
-                text = "${stage.title}$badge · 覆盖 ${(orientation.coverageProgress * 100).roundToInt()}%",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-            )
-        }
-
-        Surface(
-            color = if (voiceEnabled) Color(0xFF1B5E20).copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.65f),
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.clickable(onClick = onToggleVoice)
-        ) {
-            Text(
-                text = if (voiceEnabled) "语音开" else "已静音",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-            )
         }
     }
 }
@@ -717,11 +874,10 @@ private fun TopCaptureHud(
 private fun BottomCapturePanel(
     stage: CaptureStage,
     targetType: CaptureTargetType,
+    orientation: OrientationSnapshot,
     snapshot: LiveQualitySnapshot?,
     cameraBindError: String?,
     onAdvanceToStage2: () -> Unit,
-    onBackToStage1: () -> Unit,
-    onToggleManualCloseup: (CloseupCheckId) -> Unit,
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -734,7 +890,7 @@ private fun BottomCapturePanel(
 
     Surface(
         modifier = modifier,
-        color = Color(0xFF101318).copy(alpha = 0.88f),
+        color = Color(0xFF101318).copy(alpha = 0.90f),
         shape = RoundedCornerShape(20.dp)
     ) {
         Column(
@@ -763,7 +919,7 @@ private fun BottomCapturePanel(
                         .background(lightColor, CircleShape)
                 )
                 Text(
-                    text = snapshot?.promptText ?: "请将目标居中，保持稳定距离准备环绕",
+                    text = snapshot?.promptText ?: "请站远约 1.2–1.5 米，把目标完整装进屏幕中央虚线框",
                     color = Color.White,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
@@ -771,13 +927,26 @@ private fun BottomCapturePanel(
             }
 
             if (snapshot != null) {
-                val occPct = (snapshot.subjectOccupancy * 100).roundToInt()
-                val sharpTxt = snapshot.sharpness.roundToInt()
-                val eyeTxt = snapshot.eyeDistancePx?.let { " | 眼距 ${it.roundToInt()}px" }.orEmpty()
-                val nccTxt = snapshot.continuityNcc?.let { " | 连续度 ${"%.2f".format(it)}" }.orEmpty()
+                val distLabel = when (snapshot.framingStatus) {
+                    FramingStatus.GOOD -> "距离合适 ✓"
+                    FramingStatus.TOO_FAR -> "偏远 · 可走近点"
+                    FramingStatus.TOO_CLOSE -> "太近 · 退一大步"
+                    FramingStatus.CROPPED -> "快切边 · 退半步"
+                    FramingStatus.NOT_FOUND -> "未入框"
+                }
+                val sharpLabel = if (snapshot.sharpness >= LiveFrameQualityAnalyzer.SHARP_OK_THRESHOLD) {
+                    "画面清晰 ✓"
+                } else {
+                    "略糊 · 慢一点"
+                }
+                val extraLabel = if (stage == CaptureStage.STAGE_2_CLOSEUP && snapshot.eyeDistancePx != null) {
+                    "眼距 ${snapshot.eyeDistancePx.roundToInt()}px"
+                } else {
+                    "环绕 ${orientation.coveredCount}/12 格"
+                }
                 Text(
-                    text = "占比 $occPct% | 清晰度 $sharpTxt$nccTxt$eyeTxt",
-                    color = Color.White.copy(alpha = 0.78f),
+                    text = "$distLabel  ·  $sharpLabel  ·  $extraLabel",
+                    color = Color.White.copy(alpha = 0.80f),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -797,10 +966,10 @@ private fun BottomCapturePanel(
                         val checked = item in done
                         FilterChip(
                             selected = checked,
-                            onClick = { onToggleManualCloseup(item) },
+                            onClick = { },
                             label = {
                                 Text(
-                                    text = if (checked) "✓ ${item.label}" else item.label,
+                                    text = if (checked) "✓ ${item.label}" else "待拍：${item.label}",
                                     color = if (checked) Color.White else Color.LightGray
                                 )
                             }
@@ -821,35 +990,30 @@ private fun BottomCapturePanel(
                             containerColor = if (stage1Ready) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
                         ),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.15f)
                             .heightIn(min = 48.dp)
                     ) {
-                        Text(if (stage1Ready) "已达标 · 进入推近" else "进入推近阶段")
+                        Text(if (stage1Ready) "✓ 外圈完成 · 进入推近" else "进入第 2 步：慢推近")
                     }
                     OutlinedButton(
                         onClick = onFinish,
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 48.dp)
-                    ) {
-                        Text("结束并质检", color = Color.White)
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onBackToStage1,
                         modifier = Modifier
                             .weight(0.85f)
                             .heightIn(min = 48.dp)
                     ) {
-                        Text("补环绕角", color = Color.White)
+                        Text("直接结束", color = Color.White)
                     }
+                } else {
                     Button(
                         onClick = onFinish,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2E7D32)
+                        ),
                         modifier = Modifier
-                            .weight(1.15f)
-                            .heightIn(min = 48.dp)
+                            .fillMaxWidth()
+                            .heightIn(min = 50.dp)
                     ) {
-                        Text("完成录制并 AI 质检")
+                        Text("完成录制 · 获取 AI 质检与补拍指南")
                     }
                 }
             }
@@ -861,10 +1025,15 @@ private fun BottomCapturePanel(
 @Composable
 private fun PrepareCaptureContent(
     config: CapturePrepConfig,
+    debugConfig: CaptureDebugConfig,
     onConfigChange: (CapturePrepConfig) -> Unit,
+    onDebugConfigChange: (CaptureDebugConfig) -> Unit,
     onStartCapture: () -> Unit,
     onBack: () -> Unit
 ) {
+    var debugExpanded by remember { mutableStateOf(debugConfig.directDeepSeekEnabled) }
+    var showApiKey by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -872,7 +1041,7 @@ private fun PrepareCaptureContent(
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -889,30 +1058,35 @@ private fun PrepareCaptureContent(
             }
         }
 
-        Text(
-            text = "采用「先远景定骨架 → 一镜慢推近补细节」两段式流程，避免只远拍眼部模糊或只近拍丢失空间方位。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // 上手 3 步卡，开拍前先看明白
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("3 步完成高质量采集（全程一镜到底，不要按停止）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("① 退远 1.2–1.5 米：让人头/衣服完整放进屏幕虚线框", style = MaterialTheme.typography.bodySmall)
+                Text("② 缓慢绕一圈：被拍目标别动，你稳住手机绕一圈点亮 12 格", style = MaterialTheme.typography.bodySmall)
+                Text("③ 推近拍特写：点「进入第 2 步」凑到 40 厘米拍正脸与左右耳侧", style = MaterialTheme.typography.bodySmall)
+            }
+        }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("1. 选择采集目标", style = MaterialTheme.typography.titleMedium)
+                Text("1. 要拍什么？", style = MaterialTheme.typography.titleMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CaptureTargetType.entries.forEach { type ->
                         FilterChip(
                             selected = config.targetType == type,
                             onClick = {
                                 val defaultLabel = if (type == CaptureTargetType.HEAD) "person-001" else "garment-001"
-                                onConfigChange(
-                                    config.copy(
-                                        targetType = type,
-                                        subjectLabel = defaultLabel
-                                    )
-                                )
+                                onConfigChange(config.copy(targetType = type, subjectLabel = defaultLabel))
                             },
                             label = { Text(type.displayLabel) }
                         )
@@ -922,7 +1096,7 @@ private fun PrepareCaptureContent(
                 OutlinedTextField(
                     value = config.subjectLabel,
                     onValueChange = { onConfigChange(config.copy(subjectLabel = it)) },
-                    label = { Text("样本标识（如 person-001 / shirt-002）") },
+                    label = { Text("样本编号（如 person-001 / shirt-002）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -934,30 +1108,24 @@ private fun PrepareCaptureContent(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("2. 真实尺度与属性声明（不靠单目镜头猜身高）", style = MaterialTheme.typography.titleMedium)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedTextField(
-                        value = config.heightCmInput,
-                        onValueChange = { raw ->
-                            val filtered = raw.filter { it.isDigit() }.take(3)
-                            onConfigChange(config.copy(heightCmInput = filtered))
-                        },
-                        label = { Text("身高 cm（选填）") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                Text("2. 身高与标尺信息（防止 3D 模型大小不准）", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = config.heightCmInput,
+                    onValueChange = { raw ->
+                        onConfigChange(config.copy(heightCmInput = raw.filter { it.isDigit() }.take(3)))
+                    },
+                    label = { Text("身高 cm（选填）") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("未填写", "男", "女").forEach { g ->
                         FilterChip(
                             selected = config.genderNote == g,
                             onClick = { onConfigChange(config.copy(genderNote = g)) },
-                            label = { Text("体型参考：$g") }
+                            label = { Text("体型：$g") }
                         )
                     }
                 }
@@ -968,9 +1136,9 @@ private fun PrepareCaptureContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("已放置已知尺度参考物", style = MaterialTheme.typography.bodyLarge)
+                        Text("地上/旁边已放标尺或 A4 纸", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "例如地面 A4 纸、ArUco 标定卡或已知长度标尺",
+                            "用于后期把模型换算成真实厘米尺寸",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -983,19 +1151,95 @@ private fun PrepareCaptureContent(
             }
         }
 
+        // 开发者调试入口：无需本地电脑或云服务器即可手机直连 DeepSeek API
         Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            ),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("拍摄口诀", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text("• 阶段 1（10–15 秒）：全身/头部占屏幕 35%–55%，保持水平绕行点亮 12 个扇区。", style = MaterialTheme.typography.bodySmall)
-                Text("• 阶段 2（5–10 秒）：不要停录！请被拍人静止，镜头缓慢向前推近拍正/左右斜脸或领口。", style = MaterialTheme.typography.bodySmall)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { debugExpanded = !debugExpanded },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("开发者调试：AI 指导连接方式", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        val modeDesc = if (debugConfig.directDeepSeekEnabled && debugConfig.deepSeekApiKey.isNotBlank()) {
+                            "当前：手机直连 DeepSeek（无需电脑后端）"
+                        } else {
+                            val url = debugConfig.customServerBaseUrl.ifBlank { BuildConfig.OOTD_API_BASE_URL }
+                            "当前：连接后端服务 ($url)，连不上时自动离线预检"
+                        }
+                        Text(modeDesc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { debugExpanded = !debugExpanded }) {
+                        Text(if (debugExpanded) "收起" else "展开配置")
+                    }
+                }
+
+                if (debugExpanded) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("开启手机直连 DeepSeek API", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "仅用于真机调试，Key 只存在本机，不要带入正式发布包",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = debugConfig.directDeepSeekEnabled,
+                            onCheckedChange = { onDebugConfigChange(debugConfig.copy(directDeepSeekEnabled = it)) }
+                        )
+                    }
+
+                    if (debugConfig.directDeepSeekEnabled) {
+                        OutlinedTextField(
+                            value = debugConfig.deepSeekApiKey,
+                            onValueChange = { onDebugConfigChange(debugConfig.copy(deepSeekApiKey = it)) },
+                            label = { Text("DeepSeek API Key（sk-...）") },
+                            singleLine = true,
+                            visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                TextButton(onClick = { showApiKey = !showApiKey }) {
+                                    Text(if (showApiKey) "隐藏" else "显示")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = debugConfig.deepSeekBaseUrl,
+                            onValueChange = { onDebugConfigChange(debugConfig.copy(deepSeekBaseUrl = it)) },
+                            label = { Text("API Base URL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = debugConfig.deepSeekModel,
+                            onValueChange = { onDebugConfigChange(debugConfig.copy(deepSeekModel = it)) },
+                            label = { Text("模型名称（如 deepseek-chat）") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = debugConfig.customServerBaseUrl,
+                            onValueChange = { onDebugConfigChange(debugConfig.copy(customServerBaseUrl = it)) },
+                            label = { Text("自定义后端地址（选填，例如 http://192.168.1.10:8000）") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
         }
 
@@ -1026,9 +1270,9 @@ private fun CaptureResultContent(
         else -> Color(0xFFC62828)
     }
     val badgeLabel = when (response.readiness) {
-        "pass" -> "采集达标 · 可导出上传重建"
-        "needs_reshoot" -> "建议局部补拍（可复用已有素材）"
-        else -> "关键几何受损 · 建议重拍"
+        "pass" -> "采集达标 · 可用于 3D 重建"
+        "needs_reshoot" -> "局部有漏拍 · 按下面补拍即可"
+        else -> "关键画面有问题 · 建议重拍"
     }
 
     Column(
@@ -1050,8 +1294,9 @@ private fun CaptureResultContent(
                 onClick = {},
                 label = {
                     val modeText = when (response.mode) {
-                        "ai" -> "真 AI 指南"
-                        "mock" -> "Mock 模式"
+                        "ai" -> "服务端真 AI"
+                        DirectDeepSeekCaptureGuide.MODE_DIRECT_AI -> "直连 DeepSeek 调试"
+                        "mock" -> "服务端 Mock"
                         else -> "离线降级预检"
                     }
                     Text(modeText)
@@ -1082,7 +1327,7 @@ private fun CaptureResultContent(
 
         if (savedVideoUri != null) {
             Text(
-                text = "已本地保留录像：$savedVideoUri",
+                text = "录像已保存到相册：$savedVideoUri",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1179,7 +1424,7 @@ private fun CameraPermissionDeniedContent(
         )
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            text = "采集引导会在手机端本地分析画面清晰度、占比与眼部细节像素，不会在未经授权时开启摄像头。",
+            text = "采集引导会在手机端本地分析画面清晰度、距离与眼部细节像素，不会在未经授权时开启摄像头。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

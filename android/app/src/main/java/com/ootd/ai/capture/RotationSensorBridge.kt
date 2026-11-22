@@ -17,7 +17,10 @@ class RotationSensorBridge(
 ) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-    private val rotationSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+    // 优先使用无磁力计漂移的 TYPE_GAME_ROTATION_VECTOR（室内金属环境绕拍 360° 更稳），不可用时回退 TYPE_ROTATION_VECTOR
+    private val rotationSensor: Sensor? =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
     private val rotationMatrix = FloatArray(9)
     private var started = false
 
@@ -38,7 +41,8 @@ class RotationSensorBridge(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        val type = event.sensor.type
+        if (type != Sensor.TYPE_GAME_ROTATION_VECTOR && type != Sensor.TYPE_ROTATION_VECTOR) return
         SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
         val snapshot = tracker.updateFromRotationMatrix(rotationMatrix)
         onUpdate(snapshot)

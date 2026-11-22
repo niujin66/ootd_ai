@@ -132,6 +132,7 @@ data class CaptureGuideResponse(
 ) {
     val isPass: Boolean get() = readiness == "pass"
     val isMock: Boolean get() = mode == "mock"
+    val isDirectAi: Boolean get() = mode == DirectDeepSeekCaptureGuide.MODE_DIRECT_AI
     val isOfflineFallback: Boolean get() = mode == "offline_fallback"
 }
 
