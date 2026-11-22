@@ -1,5 +1,16 @@
 # 验收记录
 
+## 2026-11-22 晚：Android 实时采集引导分支构建、单测与鸿蒙初装（`feat/android-capture-guide`）
+
+本轮基于 `main@4dfd825` 分支开发，未改动 `TryOnScreen.kt` 试衣渲染核心与 `RemotePackageRepository.kt`。本地配置 Android SDK（`cmdline-tools 23.0.0`、`platform-tools 37.0.3`、`platforms;android-37.0`、`build-tools 36.0.0 / 37.0.0`）后完成构建与测试：
+
+| 检查 | 实际结果 | 备注 / 未覆盖边界 |
+| --- | --- | --- |
+| 后端回归复跑 | `.\server\.venv\Scripts\python.exe -m unittest discover -s server/tests -p "test_*.py"` 执行 **102 项**：101 通过、0 失败、1 跳过（`test_symlink_escape_rejected`），耗时 4.707 s | 覆盖推荐 + 采集质检接口 |
+| Android Debug 编译打包 | `.\gradlew.bat :app:assembleDebug`（附 `-Pandroid.overridePathCheck=true`）返回 `BUILD SUCCESSFUL`，产出 `app-debug.apk`（`82.06 MB`，含 CameraX 1.4.1 与 ML Kit `libface_detector_v2_jni.so`） | 中文仓库路径下须加 `overridePathCheck` |
+| Android 端全量单测 | 12 个测试类共 **66 项**（原有 49 项 + 新增采集引导与直连 DeepSeek 测试 17 项）通过 Gradle 编译产物 + Studio JBR `JUnitCore` 运行：**66 通过、0 失败**（0.225 s） | 中文路径下 Gradle 自带 `TestWorker` `@argfile` 会触发 `ClassNotFoundException`，已用 Gradle 同一份 `.class`/`.jar` 产物在 JVM 全量运行验证 |
+| 华为鸿蒙真机初装与界面交互 | 队长在自有华为鸿蒙手机安装首版 `app-debug.apk` 进入采集引导页无闪退；随后据此反馈优化了 3 步进度条、中央虚线框、白话行动提示与手机直连 DeepSeek 调试入口，并重新产出新版 APK | 尚未完成装新版 APK 后的带 Key 实拍直连 DeepSeek 全流程与录影补拍验收 |
+
 ## 2026-11-22 T02 四视角真机预检（B 侧，待 A×C 判定）
 
 设备为 B 的 Xiaomi 17 Pro（`25098PN5AC`，adb `fe474c80`，Android 17），被测包由 `c92c65f` 构建，SHA-256 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`，47,958,154 B。服务端为 `fixture-face-03b`，pose `pose-001`。

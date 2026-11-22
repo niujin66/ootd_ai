@@ -49,3 +49,15 @@
 ## 2026-11-21 卫衣重建结果复核
 
 根据第 37–45 轮报告对照最终 GLB、接缝计数和轮廓指标。第 39 轮的过渡带保有共享边，但导出文件丢失袖筒壁，后续验收增加面组回读。第 45 轮的上缘平滑改善了局部抖动，背面轮廓相对原片的第 90 百分位距离仍由 74 增至 76 像素。两个指标各自登记。留出帧 01170 仅用于目视对照，独立实衣包的真机结论由 A/C 另行记录。[实验记录](garment-gaussian-mesh.md)
+
+## 2026-11-22 晚：Android 两段式实时采集引导、SDK 环境配通与直连调试
+
+- 任务：在合并 PR #45 后，按 `docs/capture-guidance-design.md` 第 4 节落地 Android 端两段式实时采集引导，并响应队长真机试用反馈（“引导不明确、不知所措” + “暂无云服务器时直连 DeepSeek API 调试”）。
+- 提示词与设计决策：
+  - 将「只远拍眼部模糊」与「只近拍丢失环绕空间位置」的矛盾拆为单镜不中断的 **阶段 1（1.2–1.5 m 远景绕 12 扇区）→ 阶段 2（被拍人静止、镜头慢推近 40 cm 补正/左右眼部像素 ≥20 px）**；
+  - 针对室内磁力计干扰与首次点击录像时机，在 `RotationSensorBridge.kt` 优先使用 `TYPE_GAME_ROTATION_VECTOR` 再回退 `TYPE_ROTATION_VECTOR`，并补全 CameraX 绑定就绪后的 `pendingRecordStart` 延时起录；
+  - 依据华为鸿蒙真机初测反馈，把遮挡视野的中央 220 dp 大圆环移至右上角紧凑罗盘，中央改用透明虚线安全框 + 顶部 3 步进度条 + 白话下一步指令徽章；
+  - 新增 `DirectDeepSeekCaptureGuide.kt` 与本机私密 `CaptureDebugPrefs.kt`：沿用「端侧先做确定性几何/清晰度诊断，再让模型翻译成 1–4 条中文补拍步骤并严格拦截矛盾输出」的安全边界，Key 仅由用户在设备本地配置，不写入仓库或硬编码。
+- 环境与人工配合：本机缺 Android SDK，配置官方 `cmdline-tools 23.0.0`、`platform-tools 37.0.3`、`platforms;android-37.0`、`build-tools 36.0.0/37.0.0` 并通过 SHA-1 校验，打通 `:app:assembleDebug`；队长在华为鸿蒙手机实装首版 APK 验证不崩溃，并指出引导提示和调试连接方式的改进需求。
+- 本轮产物：`capture/`（7 个 Kotlin 文件）、`ui/CaptureGuideScreen.kt`、`MainActivity.kt`、`AndroidManifest.xml`、`app/build.gradle.kts` 及 `test/.../capture/`（4 个单测文件）。
+- 验证范围：后端 102 项（101 通过、1 跳过）；Android `assembleDebug` 编译打包通过（`82.06 MB`）；Android 全量 12 个测试类 66 项通过 `JUnitCore` 运行全过；真机直连 DeepSeek 端到端实拍待下一步复测。
