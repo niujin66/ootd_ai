@@ -27,6 +27,7 @@ from capture_analyzer import (
     compute_orbit_continuity,
     decode_png_bytes,
     estimate_foreground_margins,
+    estimate_head_eye_detail_px,
 )
 
 
@@ -158,6 +159,31 @@ class PngAndMetricsTests(unittest.TestCase):
         cont = compute_orbit_continuity([frame1, frame2, frame3])
         self.assertLess(cont["min"], 0.0)
 
+    def test_illumination_shadow_at_border_does_not_leak_margins(self):
+        # Neutral gray room with darker shadow band at left edge (same hue, lower brightness)
+        img = np.full((160, 160, 3), [140, 140, 140], dtype=np.uint8)
+        img[:, :28] = [95, 95, 95]  # border shadow on left wall
+        img[35:125, 45:115] = [40, 75, 160]  # distinct centered blue garment
+        res = estimate_foreground_margins(img)
+        self.assertIsNotNone(res["margins"])
+        self.assertGreaterEqual(res["margins"]["left"], 40)
+        self.assertGreaterEqual(res["margins"]["right"], 40)
+
+    def test_head_eye_detail_px_distinguishes_far_vs_closeup(self):
+        # Distant small face (~16 px wide -> single eye ~3.4 px < 8 px)
+        far_img = np.full((200, 200, 3), [30, 30, 40], dtype=np.uint8)
+        far_img[60:84, 92:108] = [215, 165, 135]  # YCbCr skin tone
+        far_eye = estimate_head_eye_detail_px(far_img)
+        self.assertIsNotNone(far_eye)
+        self.assertLess(far_eye, 8.0)
+
+        # Close-up face (~100 px wide -> single eye ~21 px >= 16 px)
+        close_img = np.full((200, 200, 3), [30, 30, 40], dtype=np.uint8)
+        close_img[30:170, 50:150] = [215, 165, 135]
+        close_eye = estimate_head_eye_detail_px(close_img)
+        self.assertIsNotNone(close_eye)
+        self.assertGreaterEqual(close_eye, 16.0)
+
 
 class ColmapAndEndToEndTests(unittest.TestCase):
     def test_colmap_half_orbit_with_rolled_cameras(self):
@@ -192,13 +218,13 @@ class ColmapAndEndToEndTests(unittest.TestCase):
             frames_dir.mkdir()
             sparse_dir.mkdir(parents=True)
 
-            # Create 6 sharp, centered, smoothly-panning PNG frames (margin >= 45px)
+            # Create 6 sharp, centered, smoothly-panning PNG frames (margin >= 50px, garment width 200px -> roi >= 16px)
             rng = np.random.default_rng(11)
-            base_patch = rng.integers(140, 240, size=(60, 60, 3), dtype=np.uint8)
+            base_patch = rng.integers(140, 240, size=(200, 200, 3), dtype=np.uint8)
             for idx in range(6):
-                img = np.full((160, 160, 3), 25, dtype=np.uint8)
-                x0 = 46 + idx
-                img[50:110, x0 : x0 + 60] = base_patch
+                img = np.full((320, 320, 3), 25, dtype=np.uint8)
+                x0 = 55 + idx
+                img[60:260, x0 : x0 + 200] = base_patch
                 (frames_dir / f"frame-{idx:03d}.png").write_bytes(_encode_png(img, filter_type=1))
 
             # Full 360 orbit upright poses -> should pass if margins & continuity are good

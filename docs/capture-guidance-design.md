@@ -32,11 +32,12 @@
 
 已实现模块：
 - **`server/capture_analyzer.py`**：零额外重型依赖（在 `server/.venv` 下仅用标准库 + NumPy 即可运行，自动兼容 `PIL` / `OpenCV` / `ffmpeg`）：
-  1. 图像/视频采样（`load_frames()`）；
+  1. 图像/视频采样（`load_frames()`）：内置纯 NumPy 8-bit PNG 解码，并在 Windows 下通过原生 Media Foundation（`ctypes`）直接读取 `.mp4`/`.mov` 视频与 `.NET System.Drawing` 批量读取 `.jpg`/`.bmp`；
   2. 清晰度方差（`compute_laplacian_sharpness()`）；
   3. 环绕连续性（`compute_orbit_continuity()`）；
-  4. 四边留白像素（`estimate_foreground_margins()`，支持外部掩膜与无掩膜多点背景调色板）；
-  5. COLMAP 稀疏模型解析（`analyze_colmap_sparse()`，同时支持 `images.bin` / `images.txt`，用光轴最小二乘交点估计目标中心、SVD 估计环绕平面法向，并自动适配横竖屏相机主轴计算 `up_roll_median_deg`）。
+  4. 四边留白像素（`estimate_foreground_margins()`）：支持外部掩膜，无掩膜时采用抗光照阴影的 RGB+色度周边调色板与中心主体似然（GrabCut-lite）+ 形态学开运算与中心最大连通域；
+  5. 关键局部像素自动估算（`estimate_head_eye_detail_px()`）：`head` 模式下基于 YCbCr 肤色区域估算单眼有效像素宽度；`garment` 模式下按服装前景宽度估算结构尺度；
+  6. COLMAP 稀疏模型解析（`analyze_colmap_sparse()`，同时支持 `images.bin` / `images.txt`，用光轴最小二乘交点估计目标中心、SVD 估计环绕平面法向，并自动适配横竖屏相机主轴计算 `up_roll_median_deg`）。
 - **`server/tools/analyze_capture.py`**：一键提取指标并可选通过 `--call-guide` 调用 `POST /v1/capture/guide`（支持 `mock` 与 `ai` 双模式）。
 
 ---

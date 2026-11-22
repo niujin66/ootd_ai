@@ -6,22 +6,28 @@ and `POST /v1/capture/guide`.
 Design constraints:
 - Runs out-of-the-box inside `server/.venv` using only the Python standard library + NumPy
   (no mandatory OpenCV/Pillow/SciPy dependency).
-- Includes a pure-NumPy 8-bit PNG decoder (color types 0/2/4/6, filters 0-4), vectorized
-  3x3 Laplacian variance sharpness, 64x64 histogram-equalized NCC orbit continuity, and
-  border-color foreground margin estimation.
-- Automatically uses Pillow / OpenCV / ffmpeg if present for JPEG or MP4 inputs.
+- Includes a pure-NumPy 8-bit PNG decoder (color types 0/2/4/6, filters 0-4), native
+  Windows Media Foundation MP4/MOV video decoder via ctypes (zero external binaries),
+  vectorized 3x3 Laplacian variance sharpness, 64x64 histogram-equalized NCC orbit
+  continuity, GrabCut-lite illumination-invariant foreground margin estimation, and
+  automatic head/garment ROI detail pixel estimation.
+- Automatically uses Pillow / OpenCV / ffmpeg if present.
 - Parses both binary (`images.bin`) and text (`images.txt`) COLMAP sparse reconstructions
   and computes look-at target center via regularized ray intersection + SVD orbit plane.
 """
 
 from __future__ import annotations
 
+import ctypes
 import math
+import os
 import shutil
 import struct
 import subprocess
+import uuid
 import zlib
 from collections import deque
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -30,15 +36,6 @@ import numpy as np
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-
-
-def _paeth(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
-    p = a.astype(np.int32) + b.astype(np.int32) - c.astype(np.int32)
-    pa = np.abs(p - a)
-    pb = np.abs(p - b)
-    pc = np.abs(p - c)
-    out = np.where((pa <= pb) & (pa <= pc), a, np.where(pb <= pc, b, c))
-    return out.astype(np.uint8)
 
 
 def decode_png_bytes(data: bytes) -> np.ndarray:
@@ -92,7 +89,11 @@ def decode_png_bytes(data: bytes) -> np.ndarray:
         if ftype == 0:
             recon[y] = row
         elif ftype == 1:
-            recon[y] = (np.cumsum(row.reshape(width, channels), axis=0) & 0xFF).reshape(stride).astype(np.uint8)
+            recon[y] = (
+                (np.cumsum(row.reshape(width, channels), axis=0) & 0xFF)
+                .reshape(stride)
+                .astype(np.uint8)
+            )
         elif ftype == 2:
             recon[y] = ((row.astype(np.int32) + up.astype(np.int32)) & 0xFF).astype(np.uint8)
         elif ftype == 3:
@@ -137,6 +138,53 @@ def _split_png_stream(stream_bytes: bytes) -> list[bytes]:
     return chunks
 
 
+def _decode_images_via_dotnet(paths: list[Path]) -> list[np.ndarray]:
+    """Batch-decode non-PNG images on Windows via .NET System.Drawing without PIL/cv2."""
+    if os.name != "nt" or not paths:
+        raise RuntimeError("Windows .NET 解码仅支持 Windows 环境")
+
+    ps_script = r"""
+Add-Type -AssemblyName System.Drawing
+$ms = New-Object System.IO.MemoryStream
+while ($line = [Console]::In.ReadLine()) {
+    if (-not $line) { continue }
+    $bmp = [System.Drawing.Bitmap]::FromFile($line)
+    $ms.SetLength(0)
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    $bytes = $ms.ToArray()
+    $lenBytes = [BitConverter]::GetBytes([int]$bytes.Length)
+    $stdout = [Console]::OpenStandardOutput()
+    $stdout.Write($lenBytes, 0, 4)
+    $stdout.Write($bytes, 0, $bytes.Length)
+    $stdout.Flush()
+}
+"""
+    stdin_data = "\n".join(str(p) for p in paths) + "\n"
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        input=stdin_data.encode("utf-8"),
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace")[-300:]
+        raise RuntimeError(f"Windows .NET 图像解码失败：{err}")
+
+    out = proc.stdout
+    pos = 0
+    frames: list[np.ndarray] = []
+    while pos + 4 <= len(out):
+        size = struct.unpack("<i", out[pos : pos + 4])[0]
+        pos += 4
+        if size <= 0 or pos + size > len(out):
+            break
+        frames.append(decode_png_bytes(out[pos : pos + size]))
+        pos += size
+    if len(frames) != len(paths):
+        raise RuntimeError(f"Windows .NET 仅解码出 {len(frames)}/{len(paths)} 张图像")
+    return frames
+
+
 def load_image_rgb(path: Path, ffmpeg_bin: str | None = None) -> np.ndarray:
     """Load an image file as (H, W, 3) uint8 RGB array."""
     suffix = path.suffix.lower()
@@ -175,8 +223,11 @@ def load_image_rgb(path: Path, ffmpeg_bin: str | None = None) -> np.ndarray:
         if proc.returncode == 0 and proc.stdout.startswith(PNG_SIGNATURE):
             return decode_png_bytes(proc.stdout)
 
+    if os.name == "nt":
+        return _decode_images_via_dotnet([path])[0]
+
     raise RuntimeError(
-        f"当前环境缺少 Pillow/OpenCV/ffmpeg，无法解码非标准 8-bit PNG 文件：{path.name}"
+        f"当前环境缺少 Pillow/OpenCV/ffmpeg，无法解码图像文件：{path.name}"
     )
 
 
@@ -185,12 +236,192 @@ def _load_mask_binary(path: Path, ffmpeg_bin: str | None = None) -> np.ndarray:
     return rgb.max(axis=2) > 127
 
 
+def _load_frames_media_foundation(video_path: Path, max_frames: int) -> tuple[list[np.ndarray], int]:
+    """Decode evenly spaced RGB frames on Windows via native Media Foundation (zero deps)."""
+
+    class _GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    class _PROPVARIANT(ctypes.Structure):
+        _fields_ = [
+            ("vt", wintypes.USHORT),
+            ("w1", wintypes.WORD),
+            ("w2", wintypes.WORD),
+            ("w3", wintypes.WORD),
+            ("val", ctypes.c_int64),
+            ("pad", ctypes.c_int64),
+        ]
+
+    def _guid(s: str) -> _GUID:
+        g = _GUID()
+        ctypes.memmove(ctypes.byref(g), uuid.UUID(s).bytes_le, 16)
+        return g
+
+    def _vcall(ptr: ctypes.c_void_p, idx: int, restype: Any, *argtypes: Any):
+        vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[idx])
+
+    ole32 = ctypes.windll.ole32
+    mfplat = ctypes.windll.mfplat
+    mfreadwrite = ctypes.windll.mfreadwrite
+
+    MF_VERSION = 0x00020070
+    FIRST_VIDEO_STREAM = 0xFFFFFFFC
+    MEDIASOURCE = 0xFFFFFFFF
+    ENABLE_VIDEO_PROCESSING = _guid("fb394f3d-ccf1-42ee-bbb3-f9b845d5681d")
+    PD_DURATION = _guid("6c990d33-bb8e-477a-8598-0d5d96fcd88a")
+    MT_MAJOR_TYPE = _guid("48eba18e-f8c9-4687-bf11-0a74c9f96a8f")
+    MT_SUBTYPE = _guid("f7e34c9a-42e8-4714-b74b-cb29d72c35e5")
+    MT_FRAME_SIZE = _guid("1652c33d-d6b2-4012-b834-72030849a37d")
+    MT_DEFAULT_STRIDE = _guid("644b4e48-1e02-4516-b0eb-c01ca9d49ac6")
+    MEDIA_TYPE_VIDEO = _guid("73646976-0000-0010-8000-00AA00389B71")
+    VIDEO_FORMAT_RGB32 = _guid("00000016-0000-0010-8000-00AA00389B71")
+    GUID_NULL = _GUID()
+
+    ole32.CoInitializeEx(None, 0)
+    mfplat.MFStartup(MF_VERSION, 0)
+
+    attrs = ctypes.c_void_p()
+    reader = ctypes.c_void_p()
+    mtype = ctypes.c_void_p()
+    cur_type = ctypes.c_void_p()
+    try:
+        mfplat.MFCreateAttributes(ctypes.byref(attrs), 1)
+        _vcall(attrs, 21, ctypes.HRESULT, ctypes.POINTER(_GUID), wintypes.UINT)(
+            attrs, ctypes.byref(ENABLE_VIDEO_PROCESSING), 1
+        )
+        hr = mfreadwrite.MFCreateSourceReaderFromURL(
+            ctypes.c_wchar_p(str(video_path.resolve())), attrs, ctypes.byref(reader)
+        )
+        if hr != 0 or not reader.value:
+            raise RuntimeError(f"MediaFoundation 无法打开视频（hr=0x{hr & 0xFFFFFFFF:x}）")
+
+        mfplat.MFCreateMediaType(ctypes.byref(mtype))
+        _vcall(mtype, 24, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(_GUID))(
+            mtype, ctypes.byref(MT_MAJOR_TYPE), ctypes.byref(MEDIA_TYPE_VIDEO)
+        )
+        _vcall(mtype, 24, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(_GUID))(
+            mtype, ctypes.byref(MT_SUBTYPE), ctypes.byref(VIDEO_FORMAT_RGB32)
+        )
+        _vcall(reader, 7, ctypes.HRESULT, wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p)(
+            reader, FIRST_VIDEO_STREAM, None, mtype
+        )
+        _vcall(reader, 6, ctypes.HRESULT, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))(
+            reader, FIRST_VIDEO_STREAM, ctypes.byref(cur_type)
+        )
+
+        wh = ctypes.c_uint64()
+        _vcall(cur_type, 8, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_uint64))(
+            cur_type, ctypes.byref(MT_FRAME_SIZE), ctypes.byref(wh)
+        )
+        width, height = wh.value >> 32, wh.value & 0xFFFFFFFF
+
+        stride_val = ctypes.c_int32()
+        hr_stride = _vcall(
+            cur_type, 7, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_int32)
+        )(cur_type, ctypes.byref(MT_DEFAULT_STRIDE), ctypes.byref(stride_val))
+        raw_stride = int(stride_val.value) if hr_stride == 0 and stride_val.value != 0 else width * 4
+        bottom_up = raw_stride < 0
+        abs_stride = abs(raw_stride)
+
+        pv_dur = _PROPVARIANT()
+        hr_dur = _vcall(
+            reader,
+            12,
+            ctypes.HRESULT,
+            wintypes.DWORD,
+            ctypes.POINTER(_GUID),
+            ctypes.POINTER(_PROPVARIANT),
+        )(reader, MEDIASOURCE, ctypes.byref(PD_DURATION), ctypes.byref(pv_dur))
+        dur_100ns = int(pv_dur.val) if hr_dur == 0 and pv_dur.val > 0 else 0
+
+        frames: list[np.ndarray] = []
+        n_target = max(1, max_frames)
+        for k in range(n_target):
+            if dur_100ns > 0:
+                pos_100ns = int(dur_100ns * k / n_target)
+                pv_pos = _PROPVARIANT(vt=20, val=pos_100ns)
+                _vcall(reader, 10, ctypes.HRESULT, wintypes.DWORD)(reader, FIRST_VIDEO_STREAM)
+                _vcall(reader, 8, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(_PROPVARIANT))(
+                    reader, ctypes.byref(GUID_NULL), ctypes.byref(pv_pos)
+                )
+
+            for _ in range(15):
+                sidx = wintypes.DWORD()
+                flags = wintypes.DWORD()
+                ts = ctypes.c_int64()
+                sample = ctypes.c_void_p()
+                _vcall(
+                    reader,
+                    9,
+                    ctypes.HRESULT,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    ctypes.POINTER(wintypes.DWORD),
+                    ctypes.POINTER(wintypes.DWORD),
+                    ctypes.POINTER(ctypes.c_int64),
+                    ctypes.POINTER(ctypes.c_void_p),
+                )(
+                    reader,
+                    FIRST_VIDEO_STREAM,
+                    0,
+                    ctypes.byref(sidx),
+                    ctypes.byref(flags),
+                    ctypes.byref(ts),
+                    ctypes.byref(sample),
+                )
+                if sample:
+                    buf = ctypes.c_void_p()
+                    _vcall(sample, 41, ctypes.HRESULT, ctypes.POINTER(ctypes.c_void_p))(
+                        sample, ctypes.byref(buf)
+                    )
+                    ptr = ctypes.c_void_p()
+                    ml = wintypes.DWORD()
+                    cl = wintypes.DWORD()
+                    _vcall(
+                        buf,
+                        3,
+                        ctypes.HRESULT,
+                        ctypes.POINTER(ctypes.c_void_p),
+                        ctypes.POINTER(wintypes.DWORD),
+                        ctypes.POINTER(wintypes.DWORD),
+                    )(buf, ctypes.byref(ptr), ctypes.byref(ml), ctypes.byref(cl))
+                    needed = height * abs_stride
+                    if cl.value >= needed:
+                        raw_buf = (ctypes.c_uint8 * cl.value).from_address(ptr.value)
+                        rows = np.ctypeslib.as_array(raw_buf)[:needed].reshape(height, abs_stride)
+                        rgb = rows[:, : width * 4].reshape(height, width, 4)[:, :, [2, 1, 0]]
+                        if bottom_up:
+                            rgb = rgb[::-1]
+                        frames.append(rgb.copy())
+                    _vcall(buf, 4, ctypes.HRESULT)(buf)
+                    _vcall(buf, 2, ctypes.c_ulong)(buf)
+                    _vcall(sample, 2, ctypes.c_ulong)(sample)
+                    break
+                if flags.value & 0x2:  # MF_SOURCE_READERF_ENDOFSTREAM
+                    break
+
+        if not frames:
+            raise RuntimeError(f"MediaFoundation 未能从视频读取任何帧：{video_path}")
+        return frames, len(frames)
+    finally:
+        for obj in (cur_type, mtype, reader, attrs):
+            if obj and obj.value:
+                _vcall(obj, 2, ctypes.c_ulong)(obj)
+        mfplat.MFShutdown()
+
+
 def load_frames_from_video(
     video_path: Path,
     max_frames: int = 36,
     ffmpeg_bin: str | None = None,
 ) -> tuple[list[np.ndarray], int]:
-    """Decode evenly spaced frames from a video file using OpenCV or ffmpeg."""
+    """Decode evenly spaced frames from a video file using OpenCV, MediaFoundation, or ffmpeg."""
     try:
         import cv2
 
@@ -212,10 +443,16 @@ def load_frames_from_video(
     except ImportError:
         pass
 
+    if os.name == "nt" and not ffmpeg_bin:
+        try:
+            return _load_frames_media_foundation(video_path, max_frames=max_frames)
+        except Exception:
+            pass
+
     exe = ffmpeg_bin or shutil.which("ffmpeg")
     if not exe:
         raise RuntimeError(
-            "解析视频需要安装 OpenCV 或在 PATH 中提供 ffmpeg（也可先抽帧为 PNG 目录再传入）"
+            "解析视频需要 OpenCV、Windows Media Foundation 或 PATH 中的 ffmpeg"
         )
 
     proc = subprocess.run(
@@ -266,6 +503,27 @@ def load_frames(
             picked = [files[i] for i in idxs]
         else:
             picked = files
+
+        # Fast path: batch-decode non-PNG images on Windows if PIL/cv2/ffmpeg absent
+        non_png = [f for f in picked if f.suffix.lower() != ".png"]
+        if non_png and os.name == "nt" and not (ffmpeg_bin or shutil.which("ffmpeg")):
+            try:
+                __import__("PIL")
+                has_py_img = True
+            except ImportError:
+                try:
+                    __import__("cv2")
+                    has_py_img = True
+                except ImportError:
+                    has_py_img = False
+            if not has_py_img:
+                decoded_map = dict(zip(non_png, _decode_images_via_dotnet(non_png)))
+                frames = [
+                    decoded_map[f] if f in decoded_map else load_image_rgb(f, ffmpeg_bin=ffmpeg_bin)
+                    for f in picked
+                ]
+                return frames, total, [f.name for f in picked]
+
         frames = [load_image_rgb(f, ffmpeg_bin=ffmpeg_bin) for f in picked]
         return frames, total, [f.name for f in picked]
 
@@ -356,6 +614,40 @@ def _majority_smooth_3x3(mask: np.ndarray) -> np.ndarray:
     return acc >= 5
 
 
+def _erode_3x3(mask: np.ndarray) -> np.ndarray:
+    if mask.shape[0] < 3 or mask.shape[1] < 3:
+        return mask
+    p = np.pad(mask.astype(bool), 1, mode="constant", constant_values=False)
+    return (
+        p[:-2, :-2]
+        & p[:-2, 1:-1]
+        & p[:-2, 2:]
+        & p[1:-1, :-2]
+        & p[1:-1, 1:-1]
+        & p[1:-1, 2:]
+        & p[2:, :-2]
+        & p[2:, 1:-1]
+        & p[2:, 2:]
+    )
+
+
+def _dilate_3x3(mask: np.ndarray) -> np.ndarray:
+    if mask.shape[0] < 3 or mask.shape[1] < 3:
+        return mask
+    p = np.pad(mask.astype(bool), 1, mode="constant", constant_values=False)
+    return (
+        p[:-2, :-2]
+        | p[:-2, 1:-1]
+        | p[:-2, 2:]
+        | p[1:-1, :-2]
+        | p[1:-1, 1:-1]
+        | p[1:-1, 2:]
+        | p[2:, :-2]
+        | p[2:, 1:-1]
+        | p[2:, 2:]
+    )
+
+
 def _largest_central_component(mask: np.ndarray) -> np.ndarray:
     """Keep the 4-connected foreground component best anchored in the central 50% ROI."""
     sh, sw = mask.shape
@@ -398,13 +690,13 @@ def estimate_foreground_margins(
     border_px: int = 8,
     color_thresh: float = 30.0,
 ) -> dict[str, Any]:
-    """Estimate foreground bounding-box margins in pixels (left/right/top/bottom)."""
+    """Estimate foreground bounding-box margins using GrabCut-lite color likelihood."""
     h, w = rgb.shape[:2]
     if mask is not None:
         fg = mask.astype(bool)
         ys_nz, xs_nz = np.nonzero(fg)
         if len(xs_nz) == 0:
-            return {"fg_ratio": 0.0, "margins": None}
+            return {"fg_ratio": 0.0, "margins": None, "bbox_width_px": 0, "bbox_height_px": 0}
         return {
             "fg_ratio": round(float(fg.mean()), 4),
             "margins": {
@@ -413,12 +705,14 @@ def estimate_foreground_margins(
                 "top": int(ys_nz.min()),
                 "bottom": int(h - 1 - ys_nz.max()),
             },
+            "bbox_width_px": int(xs_nz.max() - xs_nz.min() + 1),
+            "bbox_height_px": int(ys_nz.max() - ys_nz.min() + 1),
         }
 
     b = max(2, min(border_px, h // 10, w // 10))
     cw = max(2, min(w // 6, 32))
     ch = max(2, min(h // 6, 32))
-    patches = [
+    bg_patches = [
         rgb[:ch, :cw],
         rgb[:ch, -cw:],
         rgb[-ch:, :cw],
@@ -426,38 +720,99 @@ def estimate_foreground_margins(
         rgb[h // 3 : 2 * h // 3, :b],
         rgb[h // 3 : 2 * h // 3, -b:],
     ]
-    pal = np.asarray([np.median(p.reshape(-1, 3), axis=0) for p in patches], dtype=np.float32)
+    bg_pal = np.asarray([np.median(p.reshape(-1, 3), axis=0) for p in bg_patches], dtype=np.float32)
 
     scale = min(1.0, 160.0 / max(h, w))
     sh, sw = max(16, int(round(h * scale))), max(16, int(round(w * scale)))
     ys = np.linspace(0, h - 1, sh).astype(int)
     xs = np.linspace(0, w - 1, sw).astype(int)
     small = rgb[np.ix_(ys, xs)].astype(np.float32)
-    diff = small[:, :, None, :] - pal[None, None, :, :]
-    min_dist = np.min(np.linalg.norm(diff, axis=3), axis=2)
-    fg = _majority_smooth_3x3(_majority_smooth_3x3(min_dist > color_thresh))
+
+    # Illumination-robust RGB + chromaticity distance against perimeter palette
+    small_c = small / (small.sum(axis=2, keepdims=True) + 15.0) * 255.0
+    bg_c = bg_pal / (bg_pal.sum(axis=1, keepdims=True) + 15.0) * 255.0
+    d_rgb = np.linalg.norm(small[:, :, None, :] - bg_pal[None, None, :, :], axis=3)
+    d_chr = np.linalg.norm(small_c[:, :, None, :] - bg_c[None, None, :, :], axis=3)
+    d_bg = np.min(np.minimum(d_rgb, np.maximum(d_chr * 1.4, d_rgb * 0.65)), axis=2)
+
+    # Central subject palette (GrabCut-lite prior) prevents edge wall shadows from leaking in
+    cy0, cy1 = sh // 4, 3 * sh // 4
+    cx0, cx1 = sw // 4, 3 * sw // 4
+    c_mask = d_bg[cy0:cy1, cx0:cx1] > color_thresh
+    if np.any(c_mask):
+        fg_pixels = small[cy0:cy1, cx0:cx1][c_mask]
+        lum = fg_pixels.mean(axis=1)
+        qs = np.quantile(lum, [0.15, 0.4, 0.65, 0.9])
+        fg_pal = []
+        for q in qs:
+            near = fg_pixels[np.abs(lum - q) <= 25.0]
+            fg_pal.append(np.median(near, axis=0) if len(near) else np.median(fg_pixels, axis=0))
+        fg_pal_arr = np.asarray(fg_pal, dtype=np.float32)
+        d_fg = np.min(
+            np.linalg.norm(small[:, :, None, :] - fg_pal_arr[None, None, :, :], axis=3), axis=2
+        )
+    else:
+        d_fg = np.zeros_like(d_bg)
+
+    yy, xx = np.ogrid[:sh, :sw]
+    outer_band = (
+        (yy < int(0.10 * sh))
+        | (yy >= int(0.90 * sh))
+        | (xx < int(0.12 * sw))
+        | (xx >= int(0.88 * sw))
+    )
+    fg = (d_bg > color_thresh) & (~outer_band | (d_fg <= d_bg * 1.05))
+    fg = _majority_smooth_3x3(fg)
+    fg = _dilate_3x3(_erode_3x3(fg))
     fg = _largest_central_component(fg)
 
     ry, rx = np.nonzero(fg)
     if len(rx) == 0:
-        return {"fg_ratio": 0.0, "margins": None}
+        return {"fg_ratio": 0.0, "margins": None, "bbox_width_px": 0, "bbox_height_px": 0}
+    left_px = int(xs[rx.min()])
+    right_px = int(w - 1 - xs[rx.max()])
+    top_px = int(ys[ry.min()])
+    bottom_px = int(h - 1 - ys[ry.max()])
     return {
         "fg_ratio": round(float(fg.mean()), 4),
         "margins": {
-            "left": int(xs[rx.min()]),
-            "right": int(w - 1 - xs[rx.max()]),
-            "top": int(ys[ry.min()]),
-            "bottom": int(h - 1 - ys[ry.max()]),
+            "left": left_px,
+            "right": right_px,
+            "top": top_px,
+            "bottom": bottom_px,
         },
+        "bbox_width_px": max(1, w - left_px - right_px),
+        "bbox_height_px": max(1, h - top_px - bottom_px),
     }
+
+
+def estimate_head_eye_detail_px(rgb: np.ndarray, bbox_width_px: int = 0) -> float | None:
+    """Estimate single-eye effective pixel width from YCbCr skin-tone face region."""
+    arr = rgb.astype(np.float32)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    y_ch = 0.299 * r + 0.587 * g + 0.114 * b
+    cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
+    cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
+    skin = (y_ch > 45.0) & (cb >= 77.0) & (cb <= 127.0) & (cr >= 133.0) & (cr <= 173.0)
+    skin = _majority_smooth_3x3(skin)
+    ys, xs = np.nonzero(skin)
+    if len(xs) >= 16:
+        # Use 5%-95% horizontal span of skin region as robust face width
+        face_w = float(np.percentile(xs, 95) - np.percentile(xs, 5))
+        if face_w >= 4.0:
+            return round(face_w * 0.21, 1)
+    if bbox_width_px > 0:
+        return round(float(bbox_width_px) * 0.21, 1)
+    return None
 
 
 def analyze_frames(
     frames: list[np.ndarray],
     masks: list[np.ndarray | None] | None = None,
     margin_sample_count: int = 8,
+    target_type: str | None = None,
 ) -> dict[str, Any]:
-    """Compute sharpness, orbit continuity, and worst-case border margins across frames."""
+    """Compute sharpness, orbit continuity, border margins, and optional ROI detail px."""
     if not frames:
         raise ValueError("frames 不能为空")
 
@@ -472,6 +827,8 @@ def analyze_frames(
 
     fg_ratios: list[float] = []
     side_mins: dict[str, list[int]] = {"left": [], "right": [], "top": [], "bottom": []}
+    roi_estimates: list[float] = []
+
     for idx in sample_idxs:
         mask = masks[idx] if masks is not None and idx < len(masks) else None
         res = estimate_foreground_margins(frames[idx], mask=mask)
@@ -479,6 +836,12 @@ def analyze_frames(
         if res["margins"] is not None:
             for side, val in res["margins"].items():
                 side_mins[side].append(val)
+        if target_type == "head":
+            eye_px = estimate_head_eye_detail_px(frames[idx], bbox_width_px=res["bbox_width_px"])
+            if eye_px is not None:
+                roi_estimates.append(eye_px)
+        elif target_type == "garment" and res["bbox_width_px"] > 0:
+            roi_estimates.append(round(res["bbox_width_px"] * 0.08, 1))
 
     min_margin_px = (
         {side: int(min(vals)) for side, vals in side_mins.items() if vals}
@@ -495,6 +858,7 @@ def analyze_frames(
         "orbit_continuity_p10": continuity["p10"],
         "fg_ratio_mean": round(float(np.mean(fg_ratios)), 4) if fg_ratios else None,
         "min_margin_px": min_margin_px,
+        "roi_detail_px_est": round(float(np.median(roi_estimates)), 1) if roi_estimates else None,
     }
 
 
@@ -556,7 +920,7 @@ def parse_colmap_images(sparse_dir: Path) -> list[dict[str, Any]]:
             tvec = np.array([float(v) for v in parts[5:8]], dtype=np.float64)
             name = " ".join(parts[9:])
             imgs.append({"id": iid, "name": name, "qvec": qvec, "tvec": tvec})
-            idx += 1  # skip 2D points line
+            idx += 1
         return imgs
 
     raise FileNotFoundError(f"未在 {sparse_dir} 找到 COLMAP images.bin 或 images.txt")
@@ -601,7 +965,6 @@ def analyze_colmap_sparse(sparse_dir: Path, total_frames: int | None = None) -> 
     _, _, vt = np.linalg.svd(C - cam_mean, full_matrices=False)
     up = vt[2] / np.linalg.norm(vt[2])
 
-    # Automatically handle portrait vs landscape orientation by picking dominant up-aligned axis
     mean_abs_x = float(np.mean(np.abs(X @ up)))
     mean_abs_y = float(np.mean(np.abs(Y @ up)))
     vert_axes = X if mean_abs_x >= mean_abs_y else -Y
@@ -684,11 +1047,13 @@ def analyze_capture_source(
                 )
                 masks.append(_load_mask_binary(cand, ffmpeg_bin=ffmpeg_bin) if cand else None)
 
-        frame_stats = analyze_frames(frames, masks=masks)
+        frame_stats = analyze_frames(frames, masks=masks, target_type=target_type)
         payload["sharpness_p50"] = frame_stats["sharpness_p50"]
         payload["orbit_continuity_min"] = frame_stats["orbit_continuity_min"]
         if frame_stats["min_margin_px"] is not None:
             payload["min_margin_px"] = frame_stats["min_margin_px"]
+        if roi_detail_px is None and frame_stats.get("roi_detail_px_est") is not None:
+            payload["roi_detail_px"] = frame_stats["roi_detail_px_est"]
         payload["frame_count"] = total_frames
 
     if sparse_dir is not None:
