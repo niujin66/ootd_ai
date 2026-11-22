@@ -24,6 +24,8 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
 import uuid
 import zlib
 from collections import deque
@@ -697,49 +699,142 @@ def _largest_central_component(mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def extract_head_margins_from_mask(
+    mask: np.ndarray,
+    orig_h: int,
+    orig_w: int,
+) -> dict[str, Any]:
+    """Isolate crown-to-neck head region from a person mask so wide shoulders don't skew margins."""
+    fg = mask.astype(bool)
+    mh, mw = fg.shape
+    ys_nz, xs_nz = np.nonzero(fg)
+    if len(xs_nz) == 0:
+        return {
+            "fg_ratio": 0.0,
+            "margins": None,
+            "bbox_width_px": 0,
+            "bbox_height_px": 0,
+            "head_mask": fg,
+        }
+
+    fg_ratio = round(float(fg.mean()), 4)
+    y_top = int(ys_nz.min())
+    y_bot = int(ys_nz.max())
+    span = y_bot - y_top + 1
+
+    # Find neck constriction below the upper head peak (ignoring lower shoulder flare)
+    row_widths = fg.sum(axis=1)
+    peak_start = min(mh - 1, y_top + max(2, int(0.08 * mh)))
+    peak_end = min(mh - 1, y_top + max(peak_start - y_top + 1, int(0.42 * span)))
+    if peak_end > peak_start:
+        peak_y = peak_start + int(np.argmax(row_widths[peak_start:peak_end]))
+        peak_w = int(row_widths[peak_y])
+    else:
+        peak_y = y_top
+        peak_w = int(row_widths[y_top])
+
+    neck_end = min(y_bot, y_top + max(4, int(0.68 * span)))
+    if neck_end > peak_y + 2 and peak_w > 0:
+        cand_idx = int(np.argmin(row_widths[peak_y:neck_end]))
+        neck_w = int(row_widths[peak_y + cand_idx])
+        neck_y = peak_y + cand_idx if neck_w <= int(0.88 * peak_w) else neck_end
+    else:
+        neck_y = y_bot
+
+    head_mask = np.zeros_like(fg, dtype=bool)
+    head_mask[y_top : neck_y + 1, :] = fg[y_top : neck_y + 1, :]
+    hys, hxs = np.nonzero(head_mask)
+    if len(hxs) == 0:
+        hys, hxs = ys_nz, xs_nz
+        head_mask = fg
+
+    sx = orig_w / float(mw)
+    sy = orig_h / float(mh)
+    left_px = int(round(hxs.min() * sx))
+    right_px = int(round((mw - 1 - hxs.max()) * sx))
+    top_px = int(round(hys.min() * sy))
+    bottom_px = int(round((mh - 1 - hys.max()) * sy))
+
+    return {
+        "fg_ratio": fg_ratio,
+        "margins": {
+            "left": max(0, left_px),
+            "right": max(0, right_px),
+            "top": max(0, top_px),
+            "bottom": max(0, bottom_px),
+        },
+        "bbox_width_px": max(1, int(round((hxs.max() - hxs.min() + 1) * sx))),
+        "bbox_height_px": max(1, int(round((hys.max() - hys.min() + 1) * sy))),
+        "head_mask": head_mask,
+    }
+
+
 def estimate_foreground_margins(
     rgb: np.ndarray,
     mask: np.ndarray | None = None,
     border_px: int = 8,
     color_thresh: float = 30.0,
+    target_type: str | None = None,
 ) -> dict[str, Any]:
-    """Estimate foreground bounding-box margins using GrabCut-lite color likelihood."""
+    """Estimate foreground bounding-box margins using mask or GrabCut-lite color likelihood."""
     h, w = rgb.shape[:2]
     if mask is not None:
+        if target_type == "head":
+            return extract_head_margins_from_mask(mask, h, w)
         fg = mask.astype(bool)
+        mh, mw = fg.shape
         ys_nz, xs_nz = np.nonzero(fg)
         if len(xs_nz) == 0:
             return {"fg_ratio": 0.0, "margins": None, "bbox_width_px": 0, "bbox_height_px": 0}
+        sx = w / float(mw)
+        sy = h / float(mh)
+        left_px = int(round(xs_nz.min() * sx))
+        right_px = int(round((mw - 1 - xs_nz.max()) * sx))
+        top_px = int(round(ys_nz.min() * sy))
+        bottom_px = int(round((mh - 1 - ys_nz.max()) * sy))
         return {
             "fg_ratio": round(float(fg.mean()), 4),
             "margins": {
-                "left": int(xs_nz.min()),
-                "right": int(w - 1 - xs_nz.max()),
-                "top": int(ys_nz.min()),
-                "bottom": int(h - 1 - ys_nz.max()),
+                "left": max(0, left_px),
+                "right": max(0, right_px),
+                "top": max(0, top_px),
+                "bottom": max(0, bottom_px),
             },
-            "bbox_width_px": int(xs_nz.max() - xs_nz.min() + 1),
-            "bbox_height_px": int(ys_nz.max() - ys_nz.min() + 1),
+            "bbox_width_px": max(1, int(round((xs_nz.max() - xs_nz.min() + 1) * sx))),
+            "bbox_height_px": max(1, int(round((ys_nz.max() - ys_nz.min() + 1) * sy))),
         }
 
-    b = max(2, min(border_px, h // 10, w // 10))
-    cw = max(2, min(w // 6, 32))
-    ch = max(2, min(h // 6, 32))
-    bg_patches = [
-        rgb[:ch, :cw],
-        rgb[:ch, -cw:],
-        rgb[-ch:, :cw],
-        rgb[-ch:, -cw:],
-        rgb[h // 3 : 2 * h // 3, :b],
-        rgb[h // 3 : 2 * h // 3, -b:],
-    ]
+    # In head mode without segmentation mask, restrict background sampling to upper half
+    # so shoulders at bottom corners don't pollute the background palette.
+    work_rgb = rgb[: int(h * 0.68)] if (target_type == "head" and h > w) else rgb
+    wh, ww = work_rgb.shape[:2]
+    b = max(2, min(border_px, wh // 10, ww // 10))
+    cw = max(2, min(ww // 6, 32))
+    ch = max(2, min(wh // 6, 32))
+    if target_type == "head":
+        bg_patches = [
+            work_rgb[:ch, :cw],
+            work_rgb[:ch, -cw:],
+            work_rgb[:ch, ww // 3 : 2 * ww // 3],
+            work_rgb[ch : min(wh, ch * 3), :b],
+            work_rgb[ch : min(wh, ch * 3), -b:],
+        ]
+    else:
+        bg_patches = [
+            work_rgb[:ch, :cw],
+            work_rgb[:ch, -cw:],
+            work_rgb[-ch:, :cw],
+            work_rgb[-ch:, -cw:],
+            work_rgb[wh // 3 : 2 * wh // 3, :b],
+            work_rgb[wh // 3 : 2 * wh // 3, -b:],
+        ]
     bg_pal = np.asarray([np.median(p.reshape(-1, 3), axis=0) for p in bg_patches], dtype=np.float32)
 
-    scale = min(1.0, 160.0 / max(h, w))
-    sh, sw = max(16, int(round(h * scale))), max(16, int(round(w * scale)))
-    ys = np.linspace(0, h - 1, sh).astype(int)
-    xs = np.linspace(0, w - 1, sw).astype(int)
-    small = rgb[np.ix_(ys, xs)].astype(np.float32)
+    scale = min(1.0, 160.0 / max(wh, ww))
+    sh, sw = max(16, int(round(wh * scale))), max(16, int(round(ww * scale)))
+    ys = np.linspace(0, wh - 1, sh).astype(int)
+    xs = np.linspace(0, ww - 1, sw).astype(int)
+    small = work_rgb[np.ix_(ys, xs)].astype(np.float32)
 
     # Illumination-robust RGB + chromaticity distance against perimeter palette
     small_c = small / (small.sum(axis=2, keepdims=True) + 15.0) * 255.0
@@ -783,7 +878,7 @@ def estimate_foreground_margins(
     if len(rx) == 0:
         return {"fg_ratio": 0.0, "margins": None, "bbox_width_px": 0, "bbox_height_px": 0}
     left_px = int(xs[rx.min()])
-    right_px = int(w - 1 - xs[rx.max()])
+    right_px = int(ww - 1 - xs[rx.max()])
     top_px = int(ys[ry.min()])
     bottom_px = int(h - 1 - ys[ry.max()])
     return {
@@ -794,8 +889,8 @@ def estimate_foreground_margins(
             "top": top_px,
             "bottom": bottom_px,
         },
-        "bbox_width_px": max(1, w - left_px - right_px),
-        "bbox_height_px": max(1, h - top_px - bottom_px),
+        "bbox_width_px": max(1, ww - left_px - right_px),
+        "bbox_height_px": max(1, wh - top_px - int(ys[ry.min()])),
     }
 
 
@@ -806,34 +901,113 @@ def estimate_head_eye_detail_px(
 ) -> float | None:
     """Estimate single-eye effective pixel width from upper central YCbCr skin-tone region."""
     h, w = rgb.shape[:2]
-    arr = rgb.astype(np.float32)
+    work_rgb = rgb
+    work_mask = fg_mask
+    scale_x = 1.0
+    if fg_mask is not None and fg_mask.shape != (h, w):
+        mh, mw = fg_mask.shape[:2]
+        ys = np.linspace(0, h - 1, mh).astype(int)
+        xs = np.linspace(0, w - 1, mw).astype(int)
+        work_rgb = rgb[np.ix_(ys, xs)]
+        work_mask = fg_mask.astype(bool)
+        scale_x = w / float(mw)
+
+    wh, ww = work_rgb.shape[:2]
+    arr = work_rgb.astype(np.float32)
     r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     y_ch = 0.299 * r + 0.587 * g + 0.114 * b
     cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
     cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
     skin = (y_ch > 45.0) & (cb >= 77.0) & (cb <= 127.0) & (cr >= 133.0) & (cr <= 173.0)
-    # Focus on central/upper-body face zone so warm background walls/hands don't inflate width
-    if fg_mask is not None and fg_mask.shape == (h, w) and np.any(fg_mask):
-        skin &= fg_mask
+    if work_mask is not None and work_mask.shape == (wh, ww) and np.any(work_mask):
+        skin &= work_mask
+        # If very little skin inside the head mask (back-of-head view), skip eye estimate for this frame
+        if skin.sum() < 0.08 * work_mask.sum():
+            return None
     else:
-        zone = np.zeros((h, w), dtype=bool)
-        zone[int(0.05 * h) : int(0.75 * h), int(0.15 * w) : int(0.85 * w)] = True
+        zone = np.zeros((wh, ww), dtype=bool)
+        zone[int(0.05 * wh) : int(0.75 * wh), int(0.15 * ww) : int(0.85 * ww)] = True
         skin &= zone
+
     skin = _majority_smooth_3x3(skin)
-    ys, xs = np.nonzero(skin)
-    if len(xs) >= 16:
-        # Restrict to upper 45% of detected skin vertical span (head/face, excluding neck/chest)
-        y_top = float(np.percentile(ys, 5))
-        y_bot = float(np.percentile(ys, 95))
+    ys_s, xs_s = np.nonzero(skin)
+    if len(xs_s) >= 16:
+        y_top = float(np.percentile(ys_s, 5))
+        y_bot = float(np.percentile(ys_s, 95))
         head_cut = y_top + 0.45 * max(1.0, y_bot - y_top)
-        head_xs = xs[ys <= head_cut]
+        head_xs = xs_s[ys_s <= head_cut]
         if len(head_xs) >= 8:
-            face_w = float(np.percentile(head_xs, 92) - np.percentile(head_xs, 8))
+            face_w = float(np.percentile(head_xs, 92) - np.percentile(head_xs, 8)) * scale_x
             if face_w >= 4.0:
                 return round(face_w * 0.21, 1)
-    if bbox_width_px > 0:
+    if bbox_width_px > 0 and fg_mask is None:
         return round(float(bbox_width_px) * 0.21, 1)
     return None
+
+
+def _find_torch_runtime() -> tuple[str | None, dict[str, str]]:
+    """Locate a Python runtime with torch + torchvision and optional local torch cache."""
+    env = os.environ.copy()
+    cache_dir = Path(__file__).resolve().parent.parent.parent / "ootd_gsscan" / ".torch-cache"
+    if cache_dir.is_dir() and "TORCH_HOME" not in env:
+        env["TORCH_HOME"] = str(cache_dir)
+
+    candidates = [sys.executable]
+    if os.name == "nt":
+        dl_py = Path.home() / "anaconda3" / "envs" / "dl_env" / "python.exe"
+        if dl_py.is_file() and str(dl_py) not in candidates:
+            candidates.append(str(dl_py))
+
+    for py in candidates:
+        try:
+            proc = subprocess.run(
+                [py, "-c", "import torch, torchvision"],
+                env=env,
+                capture_output=True,
+                timeout=10,
+            )
+            if proc.returncode == 0:
+                return py, env
+        except Exception:
+            continue
+    return None, env
+
+
+def segment_person_masks_torch(
+    frames: list[np.ndarray],
+    max_dim: int = 480,
+) -> tuple[list[np.ndarray], list[float]] | None:
+    """Run DeepLabV3 person segmentation in an available PyTorch runtime (auto-cleaned temp dir)."""
+    py, env = _find_torch_runtime()
+    if not py or not frames:
+        return None
+    helper = Path(__file__).resolve().parent / "tools" / "seg_person_torch.py"
+    if not helper.is_file():
+        return None
+
+    h, w = frames[0].shape[:2]
+    scale = min(1.0, float(max_dim) / max(h, w))
+    sh, sw = max(32, int(round(h * scale))), max(32, int(round(w * scale)))
+    ys = np.linspace(0, h - 1, sh).astype(int)
+    xs = np.linspace(0, w - 1, sw).astype(int)
+    batch = np.stack([f[np.ix_(ys, xs)] for f in frames], axis=0).astype(np.uint8)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        in_npz = Path(tmp) / "frames.npz"
+        out_npz = Path(tmp) / "masks.npz"
+        np.savez(in_npz, frames=batch)
+        proc = subprocess.run(
+            [py, str(helper), "--input-npz", str(in_npz), "--output-npz", str(out_npz)],
+            env=env,
+            capture_output=True,
+            timeout=90,
+        )
+        if proc.returncode != 0 or not out_npz.is_file():
+            return None
+        with np.load(out_npz) as res:
+            masks = [res["masks"][i].astype(bool) for i in range(len(frames))]
+            probs = [float(res["probs"][i]) for i in range(len(frames))]
+        return masks, probs
 
 
 def analyze_frames(
@@ -856,18 +1030,25 @@ def analyze_frames(
         sample_idxs = np.arange(n)
 
     fg_ratios: list[float] = []
+    lost_count = 0
     side_mins: dict[str, list[int]] = {"left": [], "right": [], "top": [], "bottom": []}
     roi_estimates: list[float] = []
 
     for idx in sample_idxs:
         mask = masks[idx] if masks is not None and idx < len(masks) else None
-        res = estimate_foreground_margins(frames[idx], mask=mask)
+        res = estimate_foreground_margins(frames[idx], mask=mask, target_type=target_type)
         fg_ratios.append(res["fg_ratio"])
-        if res["margins"] is not None:
+        if res["margins"] is None or res["fg_ratio"] <= 0.0:
+            lost_count += 1
+        else:
             for side, val in res["margins"].items():
                 side_mins[side].append(val)
         if target_type == "head":
-            eye_px = estimate_head_eye_detail_px(frames[idx], bbox_width_px=res["bbox_width_px"])
+            eye_px = estimate_head_eye_detail_px(
+                frames[idx],
+                bbox_width_px=res["bbox_width_px"],
+                fg_mask=res.get("head_mask") if mask is not None else None,
+            )
             if eye_px is not None:
                 roi_estimates.append(eye_px)
         elif target_type == "garment" and res["bbox_width_px"] > 0:
@@ -887,6 +1068,8 @@ def analyze_frames(
         "orbit_continuity_mean": continuity["mean"],
         "orbit_continuity_p10": continuity["p10"],
         "fg_ratio_mean": round(float(np.mean(fg_ratios)), 4) if fg_ratios else None,
+        "fg_ratio_max": round(float(max(fg_ratios)), 4) if fg_ratios else None,
+        "lost_subject_ratio": round(lost_count / len(sample_idxs), 3) if len(sample_idxs) else 0.0,
         "min_margin_px": min_margin_px,
         "roi_detail_px_est": round(float(np.median(roi_estimates)), 1) if roi_estimates else None,
     }
@@ -1042,6 +1225,7 @@ def analyze_capture_source(
     masks_dir: Path | None = None,
     max_frames: int = 48,
     ffmpeg_bin: str | None = None,
+    person_seg: str = "auto",
     roi_detail_px: float | None = None,
     has_scale_reference: bool | None = None,
     missing_closeups: list[str] | None = None,
@@ -1062,6 +1246,7 @@ def analyze_capture_source(
             Path(input_path), max_frames=max_frames, ffmpeg_bin=ffmpeg_bin
         )
         masks: list[np.ndarray | None] | None = None
+        used_person_seg = False
         if masks_dir is not None and Path(masks_dir).is_dir():
             mdir = Path(masks_dir)
             masks = []
@@ -1076,12 +1261,25 @@ def analyze_capture_source(
                     None,
                 )
                 masks.append(_load_mask_binary(cand, ffmpeg_bin=ffmpeg_bin) if cand else None)
+            used_person_seg = any(m is not None for m in masks)
+        elif target_type == "head" and person_seg in ("auto", "torch"):
+            seg_res = segment_person_masks_torch(frames)
+            if seg_res is not None:
+                masks = seg_res[0]
+                used_person_seg = True
+            elif person_seg == "torch":
+                raise RuntimeError("未找到可用的 PyTorch + torchvision 人像分割运行环境")
 
         frame_stats = analyze_frames(frames, masks=masks, target_type=target_type)
         payload["sharpness_p50"] = frame_stats["sharpness_p50"]
         payload["orbit_continuity_min"] = frame_stats["orbit_continuity_min"]
         if frame_stats["min_margin_px"] is not None:
             payload["min_margin_px"] = frame_stats["min_margin_px"]
+        if used_person_seg:
+            if frame_stats.get("fg_ratio_max") is not None:
+                payload["subject_occupancy_max"] = frame_stats["fg_ratio_max"]
+            if frame_stats.get("lost_subject_ratio") is not None:
+                payload["lost_subject_ratio"] = frame_stats["lost_subject_ratio"]
         if roi_detail_px is None and frame_stats.get("roi_detail_px_est") is not None:
             payload["roi_detail_px"] = frame_stats["roi_detail_px_est"]
         payload["frame_count"] = total_frames

@@ -105,6 +105,43 @@ class CaptureDiagnosisTests(unittest.TestCase):
         self.assertTrue(guide["can_reuse_existing"])
         self.assertEqual(guide["steps"], [])
 
+    def test_head_shoulders_exit_bottom_still_passes(self):
+        angles = [i * 30 + 10 for i in range(12)]
+        diag = analyze_capture_metrics(
+            {
+                "target_type": "head",
+                "covered_azimuth_deg": angles,
+                "up_roll_median_deg": 4.0,
+                "min_margin_px": {"left": 80, "right": 80, "top": 90, "bottom": 0},
+                "sharpness_p50": 45.0,
+                "orbit_continuity_min": 0.55,
+                "roi_detail_px": 32.0,
+                "subject_occupancy_max": 0.42,
+                "lost_subject_ratio": 0.0,
+                "has_scale_reference": True,
+            }
+        )
+        self.assertEqual(diag["readiness"], "pass")
+
+    def test_head_overfill_and_lost_frames_trigger_distance_issues(self):
+        angles = [i * 30 + 10 for i in range(12)]
+        diag = analyze_capture_metrics(
+            {
+                "target_type": "head",
+                "covered_azimuth_deg": angles,
+                "min_margin_px": {"left": 55, "right": 55, "top": 55, "bottom": 0},
+                "sharpness_p50": 42.0,
+                "orbit_continuity_min": 0.55,
+                "roi_detail_px": 45.0,
+                "subject_occupancy_max": 0.82,
+                "lost_subject_ratio": 0.5,
+                "has_scale_reference": True,
+            }
+        )
+        codes = {item["code"] for item in diag["issues"]}
+        self.assertIn("subject_too_close", codes)
+        self.assertIn("subject_lost_frames", codes)
+
 
 class GuideValidationTests(unittest.TestCase):
     def setUp(self):

@@ -68,6 +68,8 @@ class CaptureGuideRequest(BaseModel):
     sharpness_p50: float | None = Field(default=None, ge=0.0)
     orbit_continuity_min: float | None = Field(default=None, ge=-1.0, le=1.0)
     roi_detail_px: float | None = Field(default=None, ge=0.0)
+    subject_occupancy_max: float | None = Field(default=None, ge=0.0, le=1.0)
+    lost_subject_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
     has_scale_reference: bool | None = None
     frame_count: int | None = Field(default=None, ge=1)
     registered_frames: int | None = Field(default=None, ge=0)

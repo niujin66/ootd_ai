@@ -28,6 +28,7 @@ from capture_analyzer import (
     decode_png_bytes,
     estimate_foreground_margins,
     estimate_head_eye_detail_px,
+    extract_head_margins_from_mask,
 )
 
 
@@ -183,6 +184,19 @@ class PngAndMetricsTests(unittest.TestCase):
         close_eye = estimate_head_eye_detail_px(close_img)
         self.assertIsNotNone(close_eye)
         self.assertGreaterEqual(close_eye, 16.0)
+
+    def test_extract_head_margins_ignores_wide_shoulders_at_bottom(self):
+        # 240x200 portrait bust mask: head centered [40:120, 65:135] (margins >= 64px),
+        # narrow neck [120:145, 85:115], wide shoulders [145:240, 0:200] hitting L/R/B=0!
+        mask = np.zeros((240, 200), dtype=bool)
+        mask[40:120, 65:135] = True
+        mask[120:145, 85:115] = True
+        mask[145:240, 0:200] = True
+        res = extract_head_margins_from_mask(mask, orig_h=240, orig_w=200)
+        self.assertIsNotNone(res["margins"])
+        self.assertGreaterEqual(res["margins"]["left"], 60)
+        self.assertGreaterEqual(res["margins"]["right"], 60)
+        self.assertGreaterEqual(res["margins"]["top"], 38)
 
 
 class ColmapAndEndToEndTests(unittest.TestCase):

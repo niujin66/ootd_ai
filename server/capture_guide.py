@@ -184,16 +184,18 @@ def analyze_capture_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     # 3. Framing / edge cropping margin
     margins = metrics.get("min_margin_px")
     if isinstance(margins, dict) and margins:
-        cropped_sides = [k for k, v in margins.items() if float(v) <= 5.0]
-        tight_sides = [k for k, v in margins.items() if 5.0 < float(v) < 40.0]
+        check_sides = ("left", "right", "top") if target_type == "head" else tuple(margins.keys())
+        checked_vals = {k: margins[k] for k in check_sides if k in margins}
+        cropped_sides = [k for k, v in checked_vals.items() if float(v) <= 5.0]
+        tight_sides = [k for k, v in checked_vals.items() if 5.0 < float(v) < 40.0]
         if cropped_sides:
             issues.append(
                 {
                     "code": "edge_cropped",
                     "severity": "critical",
                     "area": "画面留白与边界",
-                    "detail": f"边缘已贴边/裁切（≤5 px）：{', '.join(f'{s}={margins[s]}px' for s in cropped_sides)}",
-                    "value": min(float(v) for v in margins.values()),
+                    "detail": f"边缘已贴边/裁切（≤5 px）：{', '.join(f'{s}={checked_vals[s]}px' for s in cropped_sides)}",
+                    "value": min(float(v) for v in checked_vals.values()),
                 }
             )
         elif tight_sides:
@@ -204,11 +206,38 @@ def analyze_capture_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
                     "area": "画面留白与边界",
                     "detail": (
                         f"边缘留白不足（<40 px），存在裁切风险："
-                        f"{', '.join(f'{s}={margins[s]}px' for s in tight_sides)}"
+                        f"{', '.join(f'{s}={checked_vals[s]}px' for s in tight_sides)}"
                     ),
-                    "value": min(float(v) for v in margins.values()),
+                    "value": min(float(v) for v in checked_vals.values()),
                 }
             )
+
+    # 3b. Subject framing occupancy & segmentation loss (head/person close-up overfill)
+    occ_max = metrics.get("subject_occupancy_max")
+    if occ_max is not None and float(occ_max) > 0.65:
+        occ = float(occ_max)
+        issues.append(
+            {
+                "code": "subject_too_close",
+                "severity": "major",
+                "area": "拍摄距离与构图",
+                "detail": f"主体占画面高达 {occ * 100:.0f}%（>65%），距离过近易致头顶或耳侧出画",
+                "value": round(occ, 3),
+            }
+        )
+
+    lost_ratio = metrics.get("lost_subject_ratio")
+    if lost_ratio is not None and float(lost_ratio) > 0.25:
+        lr = float(lost_ratio)
+        issues.append(
+            {
+                "code": "subject_lost_frames",
+                "severity": "critical" if lr >= 0.5 else "major",
+                "area": "主体追踪稳定性",
+                "detail": f"约 {lr * 100:.0f}% 采样帧未检测到完整主体（偏离画面或贴得过近）",
+                "value": round(lr, 3),
+            }
+        )
 
     # 4. Sharpness / motion blur
     sharpness = metrics.get("sharpness_p50")
@@ -370,7 +399,13 @@ def _default_action_for_issue(issue: dict[str, Any], target_type: str) -> str:
     if code in ("camera_roll_severe", "camera_roll_warning"):
         return "开启手机网格参考线并双手持稳，全程保持手机水平不翻滚，重新绕拍一圈。"
     if code in ("edge_cropped", "edge_tight_margin"):
+        if target_type == "head":
+            return "将镜头后撤至 0.8–1.2 米，确保头顶与左右双耳四周留有安全边距、不贴边裁切。"
         return "向后退半步或切换 1× 焦段，确保上下左右四周保留至少 80 px 留白，勿裁切衣摆/袖口/头顶。"
+    if code == "subject_too_close":
+        return "镜头距离过近，向后退至 0.8–1.2 米使人物/主体完整处于取景框中央（占比控制在 35%–55%）。"
+    if code == "subject_lost_frames":
+        return "拍摄时保持人物头部始终位于取景框中央，匀速小步绕拍，切勿贴近至局部遮满镜头。"
     if code in ("blur_severe", "blur_moderate"):
         return "增加环境柔光并放慢环绕速度，在每个关键角度略停 0.5 秒待对焦稳定后再移动。"
     if code == "orbit_jump":

@@ -40,6 +40,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-id", default=f"cap-cli-{int(time.time())}", help="请求编号")
     parser.add_argument("--max-frames", type=int, default=48, help="最大等间隔采样帧数")
     parser.add_argument("--ffmpeg-bin", default=None, help="可选 ffmpeg 可执行文件路径")
+    parser.add_argument(
+        "--person-seg",
+        choices=("auto", "torch", "none"),
+        default="auto",
+        help="head 模式下是否自动调用 DeepLabV3 人像分割（auto=有环境则用，none=纯 NumPy）",
+    )
     parser.add_argument("--roi-detail-px", type=float, default=None, help="可选关键局部像素（如单眼像素）")
     parser.add_argument(
         "--has-scale-reference",
@@ -76,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         masks_dir=Path(args.masks_dir) if args.masks_dir else None,
         max_frames=args.max_frames,
         ffmpeg_bin=args.ffmpeg_bin,
+        person_seg=args.person_seg,
         roi_detail_px=args.roi_detail_px,
         has_scale_reference=scale_ref,
         missing_closeups=args.missing_closeups,
