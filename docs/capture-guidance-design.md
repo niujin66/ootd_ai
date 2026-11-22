@@ -66,7 +66,28 @@ android/app/src/main/java/com/ootd/ai/
     CaptureGuideScreen.kt      # 预览叠加：12 扇区进度环 + 水平仪条 + 实时语音/文字提示 + AI 补拍清单卡片
 ```
 
-### 4.2 端侧实时流水线（边拍边检）
+### 4.2 两段式由粗到细（Coarse-to-Fine）实时拍摄流程
+
+结合 11/22 真实人脸视频实测暴露的矛盾（**只远拍**会导致第 65 轮单眼仅 2–3 px 细节不足；**只近拍**会导致主体占屏 89%、头顶/耳侧出画及 38% 帧跟丢主体），Android 拍摄引导采用 **「先远景定骨架 → 一镜慢推近补细节」** 两段式状态机，手机端只跑毫秒级检测与红绿灯引导，离线 3D 重建仍在电脑端执行：
+
+```mermaid
+flowchart LR
+  S0[开拍前：输入身高/性别或放置尺度参考] --> S1[阶段1 远景整体环绕<br/>10–15秒 · 占比35%-55% · 12扇区打卡]
+  S1 -->|12扇区达标 & 人保持不动| S2[阶段2 一镜慢推近补细节<br/>5–10秒 · 脸/耳/领口特写 · 单眼>=20px]
+  S2 --> S3[结束录制：汇总两阶段指标<br/>调用 POST /v1/capture/guide]
+  S3 -->|pass| OK[提示达标，可导出上传重建]
+  S3 -->|needs_reshoot / invalid_retake| AI[展示 DeepSeek 1–4步补拍卡片 + 语音播报]
+```
+
+#### 两阶段绿灯判据与空间衔接约束
+
+| 阶段 | 目标 | 实时检测指标与绿灯门槛 | 空间位置与防断层约束 |
+| --- | --- | --- | --- |
+| **开拍前准备** | 锁定真实尺度与基础属性 | 用户输入身高/性别（或在脚下/主体旁放 A4 纸/ArUco 标定卡），**不靠单目摄像头瞎猜绝对身高** | 避免单目尺度歧义，远景画面用于提取头身比与轮廓比例 |
+| **阶段 1：远景定骨架**（10–15 s） | 建全局空间坐标系与完整环绕覆盖 | • 占比 `35%–55%`（不超过 `65%`）<br>• 头顶及左右留白 `≥ 40 px`（肩膀从底边离开属正常）<br>• `|rollDeg| ≤ 20°`<br>• 清晰度 `≥ 35`、帧间相似度 `≥ 0.35`<br>• 绕主体点亮 `12` 个 `30°` 方位扇区 | 支持 ARCore 的机型锁定 6DoF 世界锚点；无 ARCore 机型由 `TYPE_ROTATION_VECTOR` 相对偏航角 + 主体框稳定跟踪兜底 |
+| **阶段 2：慢推近补细节**（5–10 s） | 补齐五官/双耳/领口高清像素 | • 提示“人像雕塑一样保持不动，镜头慢慢向前推近”<br>• ML Kit `FaceDetection` 实时检查单眼像素 `≥ 20 px`（正脸 + 左右各 `30°` 打卡）<br>• 清晰度 `≥ 35`，无剧烈运动模糊 | **必须一镜到底连续推近**（不中断重录），确保电脑端 COLMAP/2DGS 特征点从远景平滑过渡到近景，避免空间断层 |
+
+### 4.3 端侧实时流水线（边拍边检）
 
 1. **姿态与扇区覆盖（`OrientationSectorTracker`）**：
    - 注册 `Sensor.TYPE_ROTATION_VECTOR`（`SENSOR_DELAY_GAME`）。
@@ -75,14 +96,15 @@ android/app/src/main/java/com/ootd/ai/
 2. **帧质量分析（`LiveFrameQualityAnalyzer`，限流 `3–4 FPS`）**：
    - **清晰度**：直接读取 `YUV_420_888` 的 Y 平面（降采样至 `320×240`），整数算子计算 3×3 拉普拉斯方差；连续 3 帧 `< 20` 立即弹出“画面模糊，请放慢移动”。
    - **帧间连续性**：缩放到 `64×64` 灰度均值归一化向量，与上一分析帧做点积；记录全程最小值 `orbit_continuity_min`，低于 `0.35` 实时提示“移动过快”。
-   - **头部近景/眼部像素（`target_type = "head"`）**：通过 ML Kit `FaceDetection` 取左右眼关键点距离 `eyeDistPx`（按原图分辨率换算），实时提示“请再靠近些，保证眼部清晰”，并将最小/中位眼部像素估算传入 `roi_detail_px`。
-   - **四边留白（`min_margin_px`）**：在检测框（人脸/躯干）或前景轮廓四周计算最小像素边距，低于 `40 px` 提示“请略微后退，避免裁切边缘”。
+   - **主体占比与防跟丢**：记录远景阶段峰值占比 `subject_occupancy_max`（超过 `65%` 提示“距离过近，请后退半步”）及主体丢失帧比例 `lost_subject_ratio`。
+   - **头部近景/眼部像素（`target_type = "head"`）**：阶段 2 通过 ML Kit `FaceDetection` 取左右眼关键点距离 `eyeDistPx`（按原图分辨率换算），实时提示“请再靠近些，保证眼部清晰”，并将有效眼部像素写入 `roi_detail_px`。
+   - **四边留白（`min_margin_px`）**：头部模式仅卡头顶与左右边距（低于 `40 px` 提示“请略微后退，避免裁切头顶或耳朵”）；服装模式卡上下左右四边。
 3. **录制结束 → 调用服务端 `POST /v1/capture/guide`**：
-   - 停止录制后汇总 `covered_azimuth_deg`、`up_roll_median_deg`、`sharpness_p50`、`orbit_continuity_min`、`min_margin_px`、`roi_detail_px` 等字段发送至后端。
+   - 停止录制后汇总 `covered_azimuth_deg`、`up_roll_median_deg`、`sharpness_p50`、`orbit_continuity_min`、`min_margin_px`、`subject_occupancy_max`、`lost_subject_ratio`、`roi_detail_px` 等字段发送至后端。
    - 若后端返回 `readiness = "pass"`：提示“采集达标，可导出上传重建”。
    - 若返回 `needs_reshoot` / `invalid_retake`：在结果卡片展示 AI 返回的 `summary` 与按 `priority` 排序的 1–4 条可执行补拍步骤，并支持 Android `TextToSpeech` 语音播报与一键“针对缺口角度重新拍摄”。
 
-### 4.3 接口契约对齐（已与服务端联调一致）
+### 4.4 接口契约对齐（已与服务端联调一致）
 
 端侧 `POST /v1/capture/guide` 请求与当前服务端 [app.py](../server/app.py) / [capture_guide.py](../server/capture_guide.py) 完全一致：
 
@@ -93,16 +115,18 @@ android/app/src/main/java/com/ootd/ai/
   "subject_label": "person-002",
   "covered_azimuth_deg": [0, 30, 60, 90, 120, 150],
   "up_roll_median_deg": 12.4,
-  "min_margin_px": {"left": 96, "right": 102, "top": 140, "bottom": 180},
+  "min_margin_px": {"left": 96, "right": 102, "top": 140, "bottom": 0},
+  "subject_occupancy_max": 0.48,
+  "lost_subject_ratio": 0.0,
   "sharpness_p50": 48.2,
   "orbit_continuity_min": 0.51,
-  "roi_detail_px": 5.5,
-  "has_scale_reference": false,
+  "roi_detail_px": 24.5,
+  "has_scale_reference": true,
   "missing_closeups": ["左右耳", "后脑"]
 }
 ```
 
-### 4.4 验收标准（后续合入 Android 时执行）
+### 4.5 验收标准（后续合入 Android 时执行）
 
 1. **权限与兼容性**：拒授相机权限时友好提示且不崩溃；真机无 ARCore 时传感器引导照常工作。
 2. **性能开销**：`ImageAnalysis` 开启后预览稳定 `≥ 24 FPS`，10 分钟无内存泄漏或 OOM。
