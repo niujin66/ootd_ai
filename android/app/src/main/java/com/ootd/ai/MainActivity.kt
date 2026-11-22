@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.ootd.ai.ui.CaptureGuideScreen
 import com.ootd.ai.ui.TryOnScreen
 import com.ootd.ai.ui.theme.AndroidTheme
 
@@ -46,20 +48,27 @@ import com.ootd.ai.ui.theme.AndroidTheme
  * 让用户从「选场合」开始，而不是进来只看到一个「进入试衣」按钮不知道干什么。
  * 三维场景与衣物切换在 TryOnScreen 里，这里不持有渲染逻辑。
  */
+private enum class AppRoute {
+    HOME,
+    TRY_ON,
+    CAPTURE_GUIDE
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             AndroidTheme {
-                var showTryOn by remember { mutableStateOf(false) }
+                var route by remember { mutableStateOf(AppRoute.HOME) }
 
-                if (showTryOn) {
-                    TryOnScreen(onBack = { showTryOn = false })
-                } else {
-                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                when (route) {
+                    AppRoute.TRY_ON -> TryOnScreen(onBack = { route = AppRoute.HOME })
+                    AppRoute.CAPTURE_GUIDE -> CaptureGuideScreen(onBack = { route = AppRoute.HOME })
+                    AppRoute.HOME -> Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                         HomeScreen(
-                            onEnterTryOn = { showTryOn = true },
+                            onEnterTryOn = { route = AppRoute.TRY_ON },
+                            onEnterCaptureGuide = { route = AppRoute.CAPTURE_GUIDE },
                             modifier = Modifier.padding(innerPadding)
                         )
                     }
@@ -79,6 +88,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HomeScreen(
     onEnterTryOn: () -> Unit = {},
+    onEnterCaptureGuide: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -128,14 +138,28 @@ fun HomeScreen(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
             tonalElevation = 3.dp
         ) {
-            Button(
-                onClick = onEnterTryOn,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 16.dp)
-                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("进入试衣")
+                OutlinedButton(
+                    onClick = onEnterCaptureGuide,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                ) {
+                    Text("3D 采集引导")
+                }
+                Button(
+                    onClick = onEnterTryOn,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                ) {
+                    Text("进入试衣")
+                }
             }
         }
     }

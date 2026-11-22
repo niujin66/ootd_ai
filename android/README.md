@@ -64,12 +64,18 @@ android/app/src/main/assets/local-demo/
 4. 数据线连接电脑，手机弹出「是否允许 USB 调试」时点允许
 5. 顶部设备下拉框选到该手机，点绿色三角 **Run**
 
-命令行构建（等价）：
+命令行构建（等价；若工程位于含中文字符路径下，需附带 `android.overridePathCheck=true`）：
 
 ```bash
 cd android
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug -Pandroid.overridePathCheck=true
 ```
+
+## 实时采集引导分支进度（`feat/android-capture-guide`）
+
+- 新增 `com.ootd.ai.capture/` 与 `ui/CaptureGuideScreen.kt`，接入 CameraX `1.4.1`、ML Kit `face-detection:16.1.7` 与 `TYPE_GAME_ROTATION_VECTOR` / `TYPE_ROTATION_VECTOR` 传感器，提供「阶段 1 远景 12 扇区对齐 → 阶段 2 一镜慢推近补细节 → 质检与补拍指南」闭环。
+- 准备页内置可折叠「开发者调试」入口，支持不经过本地电脑直连 DeepSeek API（API Key 仅存于手机本机 `SharedPreferences`，不进入代码库），或填入自定义后端局域网/公网地址；服务端不可达时自动切换至端侧 `OfflineCaptureDiagnoser` 离线预检，且保留相册录像 `Movies/OOTD-Capture`。
+- 已完成 `compileSdk = 37` 下的 `:app:assembleDebug` 打包（`82.06 MB`）与 12 个测试类 66 项端侧单元测试验证。
 
 ## 当前实际结果
 

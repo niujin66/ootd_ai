@@ -42,9 +42,9 @@
 
 ---
 
-## 4. 方向 2（待排期）：Android 客户端实时采集引导设计
+## 4. 方向 2：Android 客户端实时采集引导设计（已在 `feat/android-capture-guide` 实现 MVP）
 
-> 实施约束：**必须等 11/22–23 真机验收基准闭合且 `#44` 定案后再合入 `android/`**，避免提前改动当前验收 APK 哈希。
+> 实施状态：已在独立分支 `feat/android-capture-guide` 完成代码落地、Android SDK 37 本地编译打包（`app-debug.apk` 82.06 MB）及 17 项新增单元测试（端侧共 66 项单测通过），未触碰 `main` 上 03b 真机验收基线（`TryOnScreen.kt`、`RemotePackageRepository.kt`）。后续真机端到端验收闭合后再提 PR 合入 `main`。
 
 ### 4.1 依赖与模块划分
 

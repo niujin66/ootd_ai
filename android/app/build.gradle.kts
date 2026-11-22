@@ -66,6 +66,14 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.sceneview)
+    // 实时采集引导：CameraX 预览/录像/帧分析 + ML Kit 端侧人脸眼距检测
+    val cameraxVersion = "1.4.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("androidx.camera:camera-video:$cameraxVersion")
+    implementation("com.google.mlkit:face-detection:16.1.7")
     testImplementation(libs.junit)
     // GlbProbe 在单元测试里要真解析 JSON；Android 的 org.json 只是抛 not-mocked 的桩，
     // 跑 JVM 测试必须换成真实实现。只在测试源集里加，不进 APK。
