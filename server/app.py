@@ -66,7 +66,7 @@ class CaptureGuideRequest(BaseModel):
     up_roll_median_deg: float | None = Field(default=None, ge=0.0, le=180.0)
     min_margin_px: dict[str, int] | None = None
     sharpness_p50: float | None = Field(default=None, ge=0.0)
-    orbit_continuity_min: float | None = Field(default=None, ge=0.0, le=1.0)
+    orbit_continuity_min: float | None = Field(default=None, ge=-1.0, le=1.0)
     roi_detail_px: float | None = Field(default=None, ge=0.0)
     has_scale_reference: bool | None = None
     frame_count: int | None = Field(default=None, ge=1)

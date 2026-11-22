@@ -192,6 +192,7 @@ class CaptureGuideEndpointTests(unittest.TestCase):
                 "subject_label": "person-002",
                 "azimuth_span_deg": 180.0,
                 "up_roll_median_deg": 81.0,
+                "orbit_continuity_min": -0.25,
                 "roi_detail_px": 3.0,
             },
         )

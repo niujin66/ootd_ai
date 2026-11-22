@@ -279,6 +279,7 @@ def _load_frames_media_foundation(video_path: Path, max_frames: int) -> tuple[li
     MT_SUBTYPE = _guid("f7e34c9a-42e8-4714-b74b-cb29d72c35e5")
     MT_FRAME_SIZE = _guid("1652c33d-d6b2-4012-b834-72030849a37d")
     MT_DEFAULT_STRIDE = _guid("644b4e48-1e02-4516-b0eb-c01ca9d49ac6")
+    MT_VIDEO_ROTATION = _guid("c380465d-2271-428c-9b83-ecea3b4a85c1")
     MEDIA_TYPE_VIDEO = _guid("73646976-0000-0010-8000-00AA00389B71")
     VIDEO_FORMAT_RGB32 = _guid("00000016-0000-0010-8000-00AA00389B71")
     GUID_NULL = _GUID()
@@ -328,6 +329,12 @@ def _load_frames_media_foundation(video_path: Path, max_frames: int) -> tuple[li
         raw_stride = int(stride_val.value) if hr_stride == 0 and stride_val.value != 0 else width * 4
         bottom_up = raw_stride < 0
         abs_stride = abs(raw_stride)
+
+        rot_val = wintypes.UINT()
+        hr_rot = _vcall(
+            cur_type, 7, ctypes.HRESULT, ctypes.POINTER(_GUID), ctypes.POINTER(wintypes.UINT)
+        )(cur_type, ctypes.byref(MT_VIDEO_ROTATION), ctypes.byref(rot_val))
+        rot_cw = int(rot_val.value) if hr_rot == 0 else 0
 
         pv_dur = _PROPVARIANT()
         hr_dur = _vcall(
@@ -398,6 +405,12 @@ def _load_frames_media_foundation(video_path: Path, max_frames: int) -> tuple[li
                         rgb = rows[:, : width * 4].reshape(height, width, 4)[:, :, [2, 1, 0]]
                         if bottom_up:
                             rgb = rgb[::-1]
+                        if rot_cw == 90:
+                            rgb = np.rot90(rgb, k=3)
+                        elif rot_cw == 180:
+                            rgb = np.rot90(rgb, k=2)
+                        elif rot_cw == 270:
+                            rgb = np.rot90(rgb, k=1)
                         frames.append(rgb.copy())
                     _vcall(buf, 4, ctypes.HRESULT)(buf)
                     _vcall(buf, 2, ctypes.c_ulong)(buf)
@@ -786,21 +799,38 @@ def estimate_foreground_margins(
     }
 
 
-def estimate_head_eye_detail_px(rgb: np.ndarray, bbox_width_px: int = 0) -> float | None:
-    """Estimate single-eye effective pixel width from YCbCr skin-tone face region."""
+def estimate_head_eye_detail_px(
+    rgb: np.ndarray,
+    bbox_width_px: int = 0,
+    fg_mask: np.ndarray | None = None,
+) -> float | None:
+    """Estimate single-eye effective pixel width from upper central YCbCr skin-tone region."""
+    h, w = rgb.shape[:2]
     arr = rgb.astype(np.float32)
     r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     y_ch = 0.299 * r + 0.587 * g + 0.114 * b
     cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
     cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
     skin = (y_ch > 45.0) & (cb >= 77.0) & (cb <= 127.0) & (cr >= 133.0) & (cr <= 173.0)
+    # Focus on central/upper-body face zone so warm background walls/hands don't inflate width
+    if fg_mask is not None and fg_mask.shape == (h, w) and np.any(fg_mask):
+        skin &= fg_mask
+    else:
+        zone = np.zeros((h, w), dtype=bool)
+        zone[int(0.05 * h) : int(0.75 * h), int(0.15 * w) : int(0.85 * w)] = True
+        skin &= zone
     skin = _majority_smooth_3x3(skin)
     ys, xs = np.nonzero(skin)
     if len(xs) >= 16:
-        # Use 5%-95% horizontal span of skin region as robust face width
-        face_w = float(np.percentile(xs, 95) - np.percentile(xs, 5))
-        if face_w >= 4.0:
-            return round(face_w * 0.21, 1)
+        # Restrict to upper 45% of detected skin vertical span (head/face, excluding neck/chest)
+        y_top = float(np.percentile(ys, 5))
+        y_bot = float(np.percentile(ys, 95))
+        head_cut = y_top + 0.45 * max(1.0, y_bot - y_top)
+        head_xs = xs[ys <= head_cut]
+        if len(head_xs) >= 8:
+            face_w = float(np.percentile(head_xs, 92) - np.percentile(head_xs, 8))
+            if face_w >= 4.0:
+                return round(face_w * 0.21, 1)
     if bbox_width_px > 0:
         return round(float(bbox_width_px) * 0.21, 1)
     return None
