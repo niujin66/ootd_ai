@@ -6,7 +6,7 @@
 
 卫衣扫描推进到第 45 轮。袖口过渡带已重铺，帽片已接回衣身；帽缘更平顺，接缝仍有 92 条单侧边。移动端验收沿用 03b 的短袖和 POLO。[实验记录](docs/garment-gaussian-mesh.md)
 
-B 已在 OPPO 上复测 Android PR #41 的最终提交，C 已在模拟器验证坏模型回退和离线恢复。11 月 22–23 日的重点是用同一安装包独立验收 03b 两衣、异常中断和尺寸口径。[当前任务卡](docs/first-week.md) · [验收记录](docs/acceptance-record.md)
+B 已在 Xiaomi 上复测 Android PR #41 的最终提交，C 已在模拟器验证坏模型回退和离线恢复。11 月 22–23 日的重点是用同一安装包独立验收 03b 两衣、异常中断和尺寸口径。[当前任务卡](docs/first-week.md) · [验收记录](docs/acceptance-record.md)
 
 ## 2026-11-19 服装重建进度
 

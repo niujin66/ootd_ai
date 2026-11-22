@@ -1,5 +1,42 @@
 # 验收记录
 
+## 2026-11-22 T02 四视角真机预检（B 侧，待 A×C 判定）
+
+设备为 B 的 Xiaomi 17 Pro（`25098PN5AC`，adb `fe474c80`，Android 17），被测包由 `c92c65f` 构建，SHA-256 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`，47,958,154 B。服务端为 `fixture-face-03b`，pose `pose-001`。
+
+**本节是 B 侧预检，不是验收判定。** 判定权在 A（@VowVole）× C（@uniquebugle-stack），判定栏留空。
+
+### 四条前置判据
+
+| 判据 | 实测 |
+| --- | --- |
+| 生效指针 `filesDir/ootd-packages/active.json` 指向 `fixture-face-03b` | 通过 |
+| 三份 glb 的 sha256 与 manifest 一致 | 通过：`person-001` `f3dbe4c8…2354`（419,572 B）、`top-001` `45301ea0…5d15b5`（981,408 B）、`top-002` `8502d846…5e82`（671,540 B） |
+| 顶栏显示 `服务端 · fixture-face-03b · pose-001` | 通过 |
+| 底部黄字恢复提示出现 | 通过 |
+
+### 四视角截图（10 张）
+
+`top-001` 浅色印花短袖（圆领）：[正面](evidence/T02-20261122/top-001-正面.webp) · [正面斜角](evidence/T02-20261122/top-001-正面斜角.webp) · [侧面](evidence/T02-20261122/top-001-侧面.webp) · [斜后 34°](evidence/T02-20261122/top-001-斜后34.webp) · [背面](evidence/T02-20261122/top-001-背面.webp)
+
+`top-002` 深蓝翻领 POLO：[正面](evidence/T02-20261122/top-002-正面.webp) · [斜侧 60°](evidence/T02-20261122/top-002-斜侧60.webp) · [侧面 90°](evidence/T02-20261122/top-002-侧面90.webp) · [斜角](evidence/T02-20261122/top-002-斜角.webp) · [背面](evidence/T02-20261122/top-002-c.webp)
+
+### B 侧观察（粗粒度）
+
+- `top-001` 圆领：领圈整圈贴脖根，正面与斜角可见领口上沿压向颈部，偏**紧**。
+- `top-002` POLO：领子翻开成 V，与颈部之间留有空隙，偏**松**。
+- 两件领口方向相反。
+- 袖口贴合、下摆落到大腿中部无悬空、未见明显穿模。
+
+2–4 mm 级别的贴合判定截图无法承载，需 A×C 现场对光复核。
+
+### 判定栏（待 A×C 填写）
+
+| 项 | 结论 |
+| --- | --- |
+| `top-001` 四视角 | 待判定 |
+| `top-002` 四视角（首次独立判定，不继承 top-001） | 待判定 |
+
 ## 2026-11-22 后端回归与真实 AI 推荐验证（Q04-ai）
 
 本机基线 `main@9c3451d`，Windows / `server/.venv`（Python 3.12）。服务端代码相对 `80de331` 未改动，所有测试均在隔离临时数据库或默认单测环境执行，凭据仅通过临时环境变量注入，未写入仓库。
@@ -18,7 +55,7 @@
 | 对象与环境 | 已有证据 | 待验项 |
 | --- | --- | --- |
 | 卫衣离线网格，第 45 轮 | 回读 GLB 得到 203,560 个顶点、396,240 面。帽缝两侧的同向边由 225 降至 74，单侧边仍有 92 条。[实验记录与文件指纹](garment-gaussian-mesh.md) | 衣身侧接缝、下摆原片边界及后续穿着适配 |
-| B，OPPO 25098PN5AC，PR #41 的 `c92c65f` | 重打包 APK 的 SHA-256 为 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`。字号 1.0 与 1.45 均能启动、恢复 `fixture-face-03` 并显示人物与衣物。1.45 下推荐卡片名称被截断。[B 的真机记录](https://github.com/niujin66/ootd_ai/pull/41#issuecomment-7041167205) | 同包 03b 四视角、第二件失败与中断恢复 |
+| B，Xiaomi 25098PN5AC，PR #41 的 `c92c65f` | 重打包 APK 的 SHA-256 为 `d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a`。字号 1.0 与 1.45 均能启动、恢复 `fixture-face-03` 并显示人物与衣物。1.45 下推荐卡片名称被截断。[B 的真机记录](https://github.com/niujin66/ootd_ai/pull/41#issuecomment-7041167205) | 同包 03b 四视角、第二件失败与中断恢复 |
 | C，Android 17 / API 37 模拟器，`e5b6423` | 在故障服务上，E04 拒绝坏 GLB 并保留旧衣；X01 强停后断网冷启动，恢复 `fixture-face-03`，两衣可切换。[C 的复测记录](https://github.com/niujin66/ootd_ai/issues/1#issuecomment-7004290573) | C 用 B 的 APK 和正式服务独立跑真机；另在故障服务验证 E01–E03 与 X02 |
 
 ## 2026-11-19 卫衣高斯转网格实验
@@ -161,7 +198,7 @@ B 的 R01–R04 复核完了，结论是**先别合并**：`isValid()` 只看哈
 
 **真机复测（E04，2026-11-16 晚）**
 
-- 设备：OPPO `25098PN5AC`（`fe474c80`），APK 指向 `127.0.0.1:8003`，假后端 `--fixtures outputs/fault-fixtures/corrupt-glb`。
+- 设备：Xiaomi `25098PN5AC`（`fe474c80`），APK 指向 `127.0.0.1:8003`，假后端 `--fixtures outputs/fault-fixtures/corrupt-glb`。
 - 第一轮**没有通过**：只把探测挂在 `isValid()` 上，`sync()` 下载完只查了 size 和 sha256。结果坏包一路过：切目录 → 人物（好文件）上屏 → 衣物报 `Failed to parse glTF model from buffer` → 人物一变，`publishActive` 又把生效指针写成了 corrupt 版本。表现是标题变成 `服务端 · fixture-face-03-corrupt`、人物被换掉、衣服没了。**这正是复核意见第 1 条描述的场景，说明只修恢复侧不够。**
 - 补 `probeDecodable()`：下载每个资产后立刻探测，坏包在切目录之前就失败。
 - 第二轮**通过**，三个检查点逐条：
