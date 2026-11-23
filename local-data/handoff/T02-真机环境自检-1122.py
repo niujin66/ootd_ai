@@ -5,8 +5,8 @@
 也避免把 `fixture-face-03` 目录标签误判成 03b。
 
 检查项：
-  1. APK SHA-256 是否命中两份已知包之一（11/22 验收包 / 11/23 采集引导包），
-     并可用 --apk-profile 声明本次用途，防止拿错包还以为核对通过
+  1. APK SHA-256 是否命中三份已知包之一（11/22 验收包 / 11/23 720p 初版〔已作废留档〕/
+     11/23 1080p 终版），并可用 --apk-profile 声明本次用途，防止拿错包还以为核对通过
   2. assets 目录三份 GLB 的实算哈希/体积是否等于 03b 基准
   3. 目录标签（basename / active.json / manifest.json）与 catalog_version
   4. content_digest：按 server/importer.py::_content_digest 算法，用**实算文件哈希**
@@ -40,24 +40,30 @@ import struct
 import subprocess
 import sys
 
-# 11/23 起现场存在两份用途不同的 APK，一律按哈希识别，别混用、别只按文件名认。
-# d4402052…：11/22 B 交 C 的 03b 验收基准包（PR #41 / c92c65f），验收记录与 #12/#13 证据链引用它。
-# f85e0a3c…：11/23 队长私发给 A 的采集引导版（main@16d9a50+ / PR #46），82.06 MiB、v2 签名、
-#            含 CaptureGuideScreen 与 DeepSeek 调试入口，APK 内不内置衣物 GLB（走服务端下发），
-#            供 11/24–25 用「3D 采集引导」拍 top-003。
+# 11/23 晚起现场存在三份用途不同的 APK，一律按哈希识别，别混用、别只按文件名认。
+# d4402052…：11/22 B 交 C 的 03b 验收基准包（PR #41 / c92c65f），验收记录与 #12/#13 证据链引用它；
+#            队长 11/23 20:2x 拍板：03b 四视角验收照旧用它。
+# f85e0a3c…：11/23 队长私发的采集引导 720p 初版（main@16d9a50+ / PR #46），已被 1080p 终版替代，留档。
+# 32d6db8e…：11/23 20:06 构建的 1080p 终版（main@a57598e，"upgrade capture to 1080p FHD with warmup"），
+#            加 1080p 录像（Quality.FHD 优先 / HD 回退）与 1.2s 起录对焦稳像缓冲；APK 内仍不内置衣物 GLB。
+#            队长拍板：拍 top-003 直接用这一份。
 KNOWN_APKS = {
     "d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a": {
         "label": "11/22 验收包（c92c65f / PR #41）",
-        "use": "03b 四视角验收基准，B 已交 C；#12/#13 证据链与验收记录引用的就是这一个",
+        "use": "03b 四视角验收基准（队长 11/23 20:2x 拍板照旧用它）；B 已交 C，#12/#13 证据链引用",
     },
     "f85e0a3c19652c97063c8a9a3e8450539f5d5069b34bcea21dbba6f8badf5a9b": {
-        "label": "11/23 采集引导版（main@16d9a50+ / PR #46）",
-        "use": "队长 11/23 私发给 A；含 3D 采集引导，供 11/24–25 拍 top-003；不内置衣物 GLB",
+        "label": "11/23 采集引导 720p 初版（main@16d9a50+ / PR #46）",
+        "use": "已作废留档：拍 top-003 请改用 1080p 终版 32d6db8e…",
+    },
+    "32d6db8eaf466840766035c2e2f3b0542cc66bfbc2d8837face75108dbca4636": {
+        "label": "11/23 1080p 终版（main@a57598e）",
+        "use": "拍 top-003 的最终用包（1080p 录像 + 1.2s 对焦稳像缓冲）；不内置衣物 GLB",
     },
 }
 PROFILE_APK = {
     "accept": "d4402052545991ed93a3c335532f7b2d77d38700364817d6feaca2bd22ea863a",
-    "capture": "f85e0a3c19652c97063c8a9a3e8450539f5d5069b34bcea21dbba6f8badf5a9b",
+    "capture": "32d6db8eaf466840766035c2e2f3b0542cc66bfbc2d8837face75108dbca4636",
 }
 EXPECTED_APK = PROFILE_APK["accept"]   # 兼容旧调用：默认仍是 03b 验收基准
 EXPECTED_DIGEST = "f0c05a0d8b86a8bfbbb5b314692af66cc5468f252c957bae6e6490b4f7388ca0"
@@ -329,7 +335,7 @@ def main(argv):
                 problems.append("apk_unknown")
                 lines.append(f"- APK SHA-256：`{h}`（**未知包，停下核对**），{sz} B")
     else:
-        print("[APK] 未提供 --apk，跳过（现场按用途核对 d4402052545991ed… / f85e0a3c19652c970…）")
+        print("[APK] 未提供 --apk，跳过（现场按用途核对：验收 d4402052…；拍 top-003 用 1080p 版 32d6db8e…）")
 
     # 2/3/4/5 资产目录
     if not a.assets:
