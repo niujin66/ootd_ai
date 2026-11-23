@@ -6,10 +6,20 @@
 
 | 负责人 | 时间节点 | 核心交付与验收标准 |
 | --- | --- | --- |
-| **A · VowVole**（[`#13`](https://github.com/niujin66/ootd_ai/issues/13)、[`#11`](https://github.com/niujin66/ootd_ai/issues/11)） | **11/24 前**：03b 与 A04 结案<br>**11/24–25**：新法采集 `top-003` + 质检<br>**11/26–28**：2DGS 网格 + Blender 精修出 `fixture-face-04`<br>**11/29–30**：交对比表 & 协助卫衣标注 | 1. 在 `#11` 补齐 A04 方案 B 回执，与 C 闭合 03b 正式四视角判定。<br>2. 严格按[A 岗扫描辅助建模实操指南](a-scan-modeling-trial-guide.md)用新版 App 拍第 3 件真实上衣 `top-003`，跑通 `server/tools/analyze_capture.py` 质检；若本机无 CUDA GPU 则 11/25 晚前把达标 MP4 交队长出 2DGS 初模。<br>3. Blender 清杂面/修共享边/适配固定 B 版身体（`pose-001`），通过 `server/tools/export_glb_guard.py check` 后打包 `fixture-face-04` 交 C。<br>4. 11/29 在 `#13` 贴《手工 vs 扫描建模》8 项对比数据，并协同核对卫衣第 45 轮下摆掩膜与侧缝标注。 |
+| **A · VowVole**（[`#13`](https://github.com/niujin66/ootd_ai/issues/13)、[`#11`](https://github.com/niujin66/ootd_ai/issues/11)） | **11/24 前**：03b 与 A04 结案<br>**11/24–25**：新法采集 `top-003` + 质检<br>**11/26 晚**：初模评估与止损闸门<br>**11/27–28**：精修出 `fixture-face-04`<br>**11/29–30**：交对比表 & 协助标注 | 1. 在 `#11` 补齐 A04 方案 B 回执，与 C 闭合 03b 正式四视角判定。<br>2. **选款控制变量**：`top-003` 选与 03b 复杂度接近的**单层上衣**（如长袖 T 恤/套头衫/简单衬衫），严格按[A 岗扫描辅助建模实操指南](a-scan-modeling-trial-guide.md)采集并用 `analyze_capture.py` 质检达标（无 CUDA GPU 则 11/25 晚前把达标 MP4 交队长出 2DGS 初模）。<br>3. **11/26 晚止损闸门**：初模可控则走扫描直修；若破洞过多 2 天内修不完，**立即转为把扫描网格作比例参考 + 传统 Blender 模板兜底**，保证 11/28 必过 `export_glb_guard.py check` 并交出 `fixture-face-04`。<br>4. 11/29 在 `#13` 贴《手工 vs 扫描建模》对比表（含采用路线与 COLMAP 轨迹交叉核验结果），并协同核对卫衣下摆掩膜。 |
 | **B · Journey668**（[`#12`](https://github.com/niujin66/ootd_ai/issues/12)、[`#44`](https://github.com/niujin66/ootd_ai/issues/44)） | **11/24**：修复 `#44`<br>**11/25–26**：Xiaomi 真机回归采集引导<br>**11/27–28**：APK 瘦身 & 性能采样<br>**11/29–30**：R09 收口 & 多衣列表适配 | 1. 修复 `TryOnScreen.kt` 在 `font_scale = 1.45 / 2.0` 下按钮文字硬切（`#44`），同步复查首页双按钮与采集页大字号，交 PR + 截屏。<br>2. 在 Xiaomi 17 Pro 实测 `main@16d9a50`「3D 采集引导」：预览 `>= 24 FPS`、10 分钟无 OOM、相册录像保存、连后端 `/v1/capture/guide`、直连 DeepSeek 调试与离线降级，修完真机兼容缺陷。<br>3. 针对当前 `app-debug.apk`（`82.06 MB`）评估 ABI 分包与 release 压缩方案并汇报瘦身幅度；按[实施与验证清单第 4 节](implementation-plan.md#4-测量与记录格式)记录冷启动 5 次、换衣 20 次耗时与峰值内存。<br>4. 完成 R09 轻量生命周期收口（换衣 20 次、进出试衣/采集页各 5 次、前后台切换无崩溃/双重释放）及 3 件以上衣物横向列表 UI 适配，承接 A 的 `fixture-face-04`。 |
 | **C · uniquebugle-stack**（[`#1`](https://github.com/niujin66/ootd_ai/issues/1)、[`#19`](https://github.com/niujin66/ootd_ai/issues/19)、[`#26`](https://github.com/niujin66/ootd_ai/issues/26)） | **11/24**：闭合 03b + 复跑后端 102 项<br>**11/25–26**：搭团队共享测试后端<br>**11/27–28**：Q04-ai 30 条 + 引导接口 20 条评测<br>**11/29–30**：独立验真机 & `fixture-face-04` | 1. 与 A 闭合 03b 四视角正式判定；拉 `main@16d9a50` 在本机环境复跑全量后端单测（基线 102 项：101 通过、1 跳过）并登记到 `#1` 与[验收记录](acceptance-record.md)。<br>2. 部署团队共享测试后端（轻量云或稳定局域网主机运行 `server/app.py`，开启鉴权与 `OOTD_AI_MODE=ai`），提供免 `adb reverse` 地址给全队手机联调。<br>3. 执行参赛计划书要求的 **Q04-ai ≥30 条条件用例批量评测**（记录有效返回率、条件违反率、P50/P95 耗时）与 **`/v1/capture/guide` 20 条边界用例验证**，产出可直接入《项目测试文档》的统计表（严禁包含密钥）。<br>4. 独立复验 B 的 `#44` 与采集引导真机，隔离校验并导入 A 的 `fixture-face-04`（含 `top-003`），11/30 晚更新冻结前总验收表。 |
-| **队长 · niujin66**（[`#27`](https://github.com/niujin66/ootd_ai/issues/27)、[`#16`](https://github.com/niujin66/ootd_ai/issues/16)） | **11/23–30 持续主攻** | 专注建模与 AI 辅助核心研究：<br>1. 卫衣 2DGS 网格修 92 条单侧接缝、重标下摆掩膜并推进 UV/贴图与身体试穿；<br>2. 用新版两段式采集引导实拍高清近景人脸（单眼 `>= 20 px`），验证突破第 65 轮 2–3 px 眼部细节瓶颈；<br>3. 为无 CUDA 显卡的 A 跑出 `top-003` 2DGS 初模（11/26）；<br>4. 整理「实时引导 + AI 补拍前后」重建质量消融对照数据，服务《技术研究报告》与《作品创新性分析报告》。 |
+| **队长 · niujin66**（[`#27`](https://github.com/niujin66/ootd_ai/issues/27)、[`#16`](https://github.com/niujin66/ootd_ai/issues/16)） | **11/23–30 按 P0→P1→P2 收敛** | 按优先级聚焦核心研究，防止多线程阻塞：<br>**P0（首要，保整条闭环）**：11/26 支撑 A 跑出 `top-003` 2DGS 初模并协助落地手机试穿；完成 1 组「无引导乱拍 vs App 引导实拍」重建消融对照实验（含 `analyze_capture.py --sparse` **COLMAP 真实 3D 空间轨迹 vs 手机 12 扇区**交叉核验）。<br>**P1（单点突破，点到为止）**：用新版两段式采集引导实拍 1 条单眼 `>= 20 px` 近景人脸视频，验证打破第 65 轮 `2–3 px` 眼部瓶颈即可，不陷入无止境人工修脸。<br>**P2（时间紧张则暂缓）**：卫衣第 45 轮已有完整可复现网格与数据（`e7d50a3a...`），优先保 `top-003` 与 12/7 冻结，余力充足时再修剩余 92 条帽缝。 |
+
+### 11/24–12/7 关键里程碑与止损闸门
+
+| 节点 | 门禁内容 | 判定标准与保底措施 |
+| --- | --- | --- |
+| **11/24** | `03b` 两衣与 `#44` 清零 | A×C 在 `acceptance-record.md` 闭合两衣四视角判定；B 交 `#44` 修复 PR；C 复跑后端 102 项通过。 |
+| **11/26 晚** | `top-003` 初模评估闸门 | 已出 2DGS 初模并判断可行性：可控则扫描直修，破损过大立即切「扫描参考 + Blender 模板」保底。 |
+| **11/28 晚** | 3 衣包 `fixture-face-04` 交接 | 含 `top-003.glb` 且过 `export_glb_guard.py check`，正式交 C 隔离导入。 |
+| **11/30 晚** | 三衣上手机 & AI 全链路联调 | 手机端展示 3 件真实上衣；Q04-ai 30 条、引导接口 20 条、采集消融对比（含轨迹核验）数据全部落盘。 |
+| **12/7** | 主要功能冻结 | 冻结端/云代码与演示资产包版本，转入 12/14 提交包复验与 12/15 参赛提交。 |
 
 ---
 
