@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ootd.ai.BuildConfig
@@ -603,13 +605,14 @@ private fun TryOnContent(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     garments.forEach { g ->
                         val isCurrent = g.assetId == appliedGarmentId
                         val buttonModifier = Modifier
                             .weight(1f)
-                            .height(46.dp)
+                            .heightIn(min = 46.dp)
                         if (isCurrent) {
                             Button(
                                 onClick = { },
@@ -617,8 +620,9 @@ private fun TryOnContent(
                                 contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
                             ) {
-                                Text(g.label, maxLines = 1, fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold)
+                                Text(g.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    textAlign = TextAlign.Center)
                             }
                         } else {
                             OutlinedButton(
@@ -635,7 +639,8 @@ private fun TryOnContent(
                                     contentColor = Color.White.copy(alpha = 0.92f)),
                                 contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
-                            ) { Text(g.label, maxLines = 1, fontSize = 12.sp) }
+                            ) { Text(g.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                fontSize = 12.sp, textAlign = TextAlign.Center) }
                         }
                     }
                     OutlinedButton(
@@ -647,8 +652,8 @@ private fun TryOnContent(
                         contentPadding = PaddingValues(horizontal = 6.dp),
                         modifier = Modifier
                             .weight(1.1f)
-                            .height(46.dp)
-                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1, fontSize = 12.sp) }
+                            .heightIn(min = 46.dp)
+                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
                 }
             }
         }
