@@ -13,6 +13,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -106,6 +107,7 @@ import com.ootd.ai.capture.OrientationSnapshot
 import com.ootd.ai.capture.RotationSensorBridge
 import com.ootd.ai.capture.TrafficLight
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -176,6 +178,7 @@ fun CaptureGuideScreen(
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var activeRecording by remember { mutableStateOf<Recording?>(null) }
     var pendingRecordStart by remember { mutableStateOf(false) }
+    var recordingWarmupActive by remember { mutableStateOf(false) }
     var cameraBindError by remember { mutableStateOf<String?>(null) }
 
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -264,6 +267,25 @@ fun CaptureGuideScreen(
         }
     }
 
+    LaunchedEffect(isCapturing, pendingRecordStart, videoCapture) {
+        val vc = videoCapture ?: return@LaunchedEffect
+        if (!isCapturing || !pendingRecordStart) return@LaunchedEffect
+        recordingWarmupActive = true
+        delay(1200L)
+        if (!isCapturing || !pendingRecordStart) {
+            recordingWarmupActive = false
+            return@LaunchedEffect
+        }
+        tracker.reset()
+        analyzer.reset(CaptureStage.STAGE_1_OVERVIEW)
+        orientationSnapshot = tracker.currentSnapshot()
+        qualitySnapshot = null
+        pendingRecordStart = false
+        recordingWarmupActive = false
+        beginMediaStoreRecording(vc)
+        speakHint("第 1 步，退远一点把目标装进虚线框，连人带手机真正绕着目标走一圈", flush = true)
+    }
+
     fun startRecordingSession(gapIndices: Set<Int> = emptySet()) {
         tracker.reset()
         analyzer = LiveFrameQualityAnalyzer(prepConfig.targetType)
@@ -274,18 +296,13 @@ fun CaptureGuideScreen(
         guideResult = null
         targetGapSectors = gapIndices
         pendingRecordStart = true
+        recordingWarmupActive = true
         stage = CaptureStage.STAGE_1_OVERVIEW
-
-        val vc = videoCapture
-        if (vc != null) {
-            pendingRecordStart = false
-            beginMediaStoreRecording(vc)
-        }
-        speakHint("第 1 步，退远一点把目标装进虚线框，然后向右缓慢绕一圈", flush = true)
     }
 
     fun finishAndInspect() {
         pendingRecordStart = false
+        recordingWarmupActive = false
         runCatching { activeRecording?.stop() }
         activeRecording = null
         stage = CaptureStage.ANALYZING
@@ -370,10 +387,6 @@ fun CaptureGuideScreen(
                         orientationProvider = { orientationSnapshot },
                         onVideoCaptureReady = { vc ->
                             videoCapture = vc
-                            if (pendingRecordStart && activeRecording == null) {
-                                pendingRecordStart = false
-                                beginMediaStoreRecording(vc)
-                            }
                         },
                         onBindError = { msg -> cameraBindError = msg },
                         onQualitySnapshot = { snap -> qualitySnapshot = snap }
@@ -389,6 +402,7 @@ fun CaptureGuideScreen(
                         onToggleVoice = { voiceEnabled = !voiceEnabled },
                         onBack = {
                             pendingRecordStart = false
+                            recordingWarmupActive = false
                             runCatching { activeRecording?.stop() }
                             activeRecording = null
                             stage = CaptureStage.PREPARE
@@ -417,6 +431,7 @@ fun CaptureGuideScreen(
                         targetType = prepConfig.targetType,
                         orientation = orientationSnapshot,
                         snapshot = qualitySnapshot,
+                        recordingWarmupActive = recordingWarmupActive,
                         cameraBindError = cameraBindError,
                         onAdvanceToStage2 = {
                             analyzer.enterStage2Closeup()
@@ -530,7 +545,12 @@ private fun CameraPreviewAndAnalyzer(
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
                 val recorder = Recorder.Builder()
-                    .setQualitySelector(QualitySelector.from(Quality.HD))
+                    .setQualitySelector(
+                        QualitySelector.fromOrderedList(
+                            listOf(Quality.FHD, Quality.HD),
+                            FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)
+                        )
+                    )
                     .build()
                 val videoCapture = VideoCapture.withOutput(recorder)
                 val imageAnalysis = ImageAnalysis.Builder()
@@ -809,9 +829,9 @@ private fun SafeFramingGuideOverlay(
                     stage == CaptureStage.STAGE_2_CLOSEUP ->
                         "凑近到 30–50cm · 拍清领口和纹理"
                     targetType == CaptureTargetType.HEAD ->
-                        "退到 1.2–1.5m · 头肩完整留在框内"
+                        "退到 1.2–1.5m · 连人带机真正绕行"
                     else ->
-                        "把整件衣服装进框 · 四边留空隙"
+                        "装进整件衣服 · 迈步绕一圈"
                 }
                 Text(
                     text = boxCaption,
@@ -876,12 +896,13 @@ private fun BottomCapturePanel(
     targetType: CaptureTargetType,
     orientation: OrientationSnapshot,
     snapshot: LiveQualitySnapshot?,
+    recordingWarmupActive: Boolean,
     cameraBindError: String?,
     onAdvanceToStage2: () -> Unit,
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val light = snapshot?.trafficLight ?: TrafficLight.GREEN
+    val light = if (recordingWarmupActive) TrafficLight.YELLOW else (snapshot?.trafficLight ?: TrafficLight.GREEN)
     val lightColor = when (light) {
         TrafficLight.GREEN -> Color(0xFF2E7D32)
         TrafficLight.YELLOW -> Color(0xFFF9A825)
@@ -919,7 +940,11 @@ private fun BottomCapturePanel(
                         .background(lightColor, CircleShape)
                 )
                 Text(
-                    text = snapshot?.promptText ?: "请站远约 1.2–1.5 米，把目标完整装进屏幕中央虚线框",
+                    text = if (recordingWarmupActive) {
+                        "正在自动对焦稳像（1 秒），请拿稳手机对准虚线框…"
+                    } else {
+                        snapshot?.promptText ?: "请站远约 1.2–1.5 米，把目标完整装进屏幕中央虚线框"
+                    },
                     color = Color.White,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
@@ -1069,7 +1094,7 @@ private fun PrepareCaptureContent(
             ) {
                 Text("3 步完成高质量采集（全程一镜到底，不要按停止）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Text("① 退远 1.2–1.5 米：让人头/衣服完整放进屏幕虚线框", style = MaterialTheme.typography.bodySmall)
-                Text("② 缓慢绕一圈：被拍目标别动，你稳住手机绕一圈点亮 12 格", style = MaterialTheme.typography.bodySmall)
+                Text("② 缓慢绕一圈：被拍目标别动，连人带手机真正围绕目标走满一圈（别只站在原地扭手腕）", style = MaterialTheme.typography.bodySmall)
                 Text("③ 推近拍特写：点「进入第 2 步」凑到 40 厘米拍正脸与左右耳侧", style = MaterialTheme.typography.bodySmall)
             }
         }

@@ -481,7 +481,7 @@ class LiveFrameQualityAnalyzer(
                     trafficLight = TrafficLight.GREEN,
                     framingStatus = FramingStatus.GOOD,
                     actionBadge = "$dirHint ($count/12)",
-                    promptText = "距离刚刚好！被拍人站着别动，你稳住手机$dirHint（已点亮 $count/12 格）",
+                    promptText = "距离刚刚好！请被拍人别动，你迈开脚步$dirHint（已点亮 $count/12 格，别只原地扭手腕）",
                     voiceKey = null
                 )
             }
