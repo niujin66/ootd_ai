@@ -2,6 +2,10 @@
 
 衣序面向日常穿搭，在 Android 上展示本人的三维人物，根据场合和偏好推荐已有衣物，点击后切换独立三维上衣。
 
+## 2026-11-23 冲刺任务卡（距离 12/7 功能冻结 14 天）
+
+已同步发布 **11 月 23–30 日四人并行冲刺排期**：A 岗试用团队新跑通的「手机引导采集 → 质检 → 2DGS 转网格 → Blender 精修」流程制作 `top-003` 并沉淀耗时/精度对照；B 岗解决 `#44`、完成 Xiaomi 17 Pro 采集引导真机回归、APK 瘦身/性能采样与 R09 生命周期收口；C 岗搭建共享测试后端并完成 Q04-ai 30 条 + 采集接口 20 条量化评测；队长聚焦卫衣接缝/下摆、头部近景突破与重建质量消融研究。详见[当前任务卡](docs/first-week.md)与[A 岗扫描辅助建模实操指南](docs/a-scan-modeling-trial-guide.md)。
+
 ## 2026-11-22 开发进度
 
 - **主线里程碑（`main`）**：已合入 PR #45（03b 四视角 B 侧预检证据 10 张截图与四判据），完成 `deepseek-flash` 真实 AI 推荐（Q04-ai）与新增后端采集质检接口 `POST /v1/capture/guide`；后端自动化共 **102 项**（101 通过、1 因 Windows 符号链接权限跳过）。
@@ -45,7 +49,8 @@ B 已在 Xiaomi 上复测 Android PR #41 的最终提交，C 已在模拟器验�
 
 ## 队员从这里开始
 
-- [当前任务卡](docs/first-week.md)写明 A、B、C 和队长的负责人、截止时间、输入、交付与验收。
+- [当前任务卡](docs/first-week.md)写明 A、B、C 和队长的负责人、截止时间、输入、交付与验收（含 11/23–30 冲刺表）。
+- [A 岗扫描辅助建模实操指南](docs/a-scan-modeling-trial-guide.md)说明如何用新版两段式采集引导 + `analyze_capture.py` + 2DGS + Blender 流程制作第 3 件真实上衣与记录对比数据。
 - [技术状态和运行入口](docs/technical-notes.md)说明实际完成范围。
 - [头部贴图流水线](docs/head-texture-pipeline.md)记录扫描网格的 UV、烘焙、验收与复用。
 - [服装高斯转网格记录](docs/garment-gaussian-mesh.md)记录卫衣相机对齐、网格提取及局部补全。
