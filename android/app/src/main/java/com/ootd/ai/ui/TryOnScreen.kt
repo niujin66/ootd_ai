@@ -620,7 +620,7 @@ private fun TryOnContent(
                                 contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
                             ) {
-                                Text(g.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                Text(g.label, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                                     textAlign = TextAlign.Center)
                             }
@@ -639,7 +639,7 @@ private fun TryOnContent(
                                     contentColor = Color.White.copy(alpha = 0.92f)),
                                 contentPadding = PaddingValues(horizontal = 6.dp),
                                 modifier = buttonModifier
-                            ) { Text(g.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            ) { Text(g.label, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                 fontSize = 12.sp, textAlign = TextAlign.Center) }
                         }
                     }
@@ -651,9 +651,10 @@ private fun TryOnContent(
                             contentColor = Color.White.copy(alpha = 0.92f)),
                         contentPadding = PaddingValues(horizontal = 6.dp),
                         modifier = Modifier
-                            .weight(1.1f)
+                            .weight(0.9f)
                             .heightIn(min = 46.dp)
-                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
+                    ) { Text(if (syncing) "同步中…" else "拉取目录", maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp, textAlign = TextAlign.Center) }
                 }
             }
         }
