@@ -99,6 +99,7 @@ flowchart LR
    - **主体占比与防跟丢**：记录远景阶段峰值占比 `subject_occupancy_max`（超过 `65%` 提示“距离过近，请后退半步”）及主体丢失帧比例 `lost_subject_ratio`。
    - **头部近景/眼部像素（`target_type = "head"`）**：阶段 2 通过 ML Kit `FaceDetection` 取左右眼关键点距离 `eyeDistPx`（按原图分辨率换算），实时提示“请再靠近些，保证眼部清晰”，并将有效眼部像素写入 `roi_detail_px`。
    - **四边留白（`min_margin_px`）**：头部模式仅卡头顶与左右边距（低于 `40 px` 提示“请略微后退，避免裁切头顶或耳朵”）；服装模式卡上下左右四边。
+   - **背景可靠性（11/25 `de055e1`）**：梯度外接框只在干净/纯色背景上可靠。真实室内四边常有门框、家具、地砖强边缘，会把整幅画面误判成“主体过大”，从而误报“太近/往后退”。修复后 `SubjectFraming` 增加 `reliable` 标志，杂乱背景返回 `FramingStatus.MANUAL_GUIDE`：不再用该框判 `TOO_CLOSE`/`TOO_FAR`，也不参与阶段 1 的占比与留白统计，改为提示“请目视将目标完整装进中央虚线框（四周留边），迈步X（已点亮 N/12 格）”；阶段 2 的细节像素改用保守占比 `0.60` 估算。**因此 `min_margin_px` 在杂乱背景上只能由后端离线质检给出**，端侧不再实时拦截，交付判据不变（四边 `≥ 40 px`）。
 3. **录制结束 → 调用服务端 `POST /v1/capture/guide`**：
    - 停止录制后汇总 `covered_azimuth_deg`、`up_roll_median_deg`、`sharpness_p50`、`orbit_continuity_min`、`min_margin_px`、`subject_occupancy_max`、`lost_subject_ratio`、`roi_detail_px` 等字段发送至后端。
    - 若后端返回 `readiness = "pass"`：提示“采集达标，可导出上传重建”。
