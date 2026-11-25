@@ -110,19 +110,130 @@ class LiveFrameQualityAnalyzerTest {
         assertTrue(req.missingCloseups.isEmpty())
     }
 
+    private fun makeClutteredRoomFrame(w: Int, h: Int): GrayFrame {
+        val buf = ByteArray(w * h) { 120 }
+        // 模拟真实宿舍/室内四边环境边缘（门框、踢脚线、柜边）与中央衣物
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val isBorderClutter =
+                    (x in 4 until 24 && (y % 16) < 8) ||
+                        (x in (w - 24) until (w - 4) && ((y + 8) % 16) < 8) ||
+                        (y in 4 until 24 && (x % 16) < 8) ||
+                        (y in (h - 24) until (h - 4) && ((x + 8) % 16) < 8)
+                val isGarment = x in (w / 3) until (2 * w / 3) && y in (h / 4) until (3 * h / 4)
+                val v = when {
+                    isBorderClutter -> 235
+                    isGarment && (((x / 8) + (y / 8)) % 2 == 0) -> 210
+                    isGarment -> 80
+                    else -> 120
+                }
+                buf[y * w + x] = v.toByte()
+            }
+        }
+        return GrayFrame(w, h, buf)
+    }
+
     @Test
-    fun `garment edge estimation detects centered vs cropped box`() {
+    fun `garment edge estimation detects centered vs single-side cropped box`() {
         val centered = makeCenteredBoxFrame(400, 400, 100, 80, 300, 320)
         val boundsOk = LiveFrameQualityAnalyzer.estimateSubjectBounds(centered)
         assertTrue(boundsOk.detected)
+        assertTrue(boundsOk.reliable)
         assertTrue(boundsOk.occupancy in 0.20..0.45)
         assertTrue(boundsOk.marginLeftPx >= 40)
         assertTrue(boundsOk.marginTopPx >= 40)
 
-        val cropped = makeCenteredBoxFrame(400, 400, 0, 0, 395, 395)
-        val boundsCropped = LiveFrameQualityAnalyzer.estimateSubjectBounds(cropped)
+        // 纯色背景单侧贴边裁切应保留可靠告警
+        val singleSideCropped = makeCenteredBoxFrame(400, 400, 0, 80, 220, 320)
+        val boundsCropped = LiveFrameQualityAnalyzer.estimateSubjectBounds(singleSideCropped)
         assertTrue(boundsCropped.detected)
-        assertTrue(boundsCropped.occupancy > 0.65)
+        assertTrue(boundsCropped.reliable)
         assertEquals(0, boundsCropped.marginLeftPx)
+        val cropSnap = LiveFrameQualityAnalyzer(CaptureTargetType.GARMENT).analyzeFrame(singleSideCropped, null)
+        assertEquals(FramingStatus.CROPPED, cropSnap.framingStatus)
+
+        // 纯色背景下居中但占比 > 65% 应正常报 TOO_CLOSE
+        val tooCloseClean = makeCenteredBoxFrame(600, 600, 50, 50, 550, 550)
+        val tooCloseSnap = LiveFrameQualityAnalyzer(CaptureTargetType.GARMENT).analyzeFrame(tooCloseClean, null)
+        assertEquals(FramingStatus.TOO_CLOSE, tooCloseSnap.framingStatus)
+    }
+
+    @Test
+    fun `cluttered indoor background does not falsely trigger step back for garment`() {
+        val roomFrame = makeClutteredRoomFrame(400, 400)
+        val bounds = LiveFrameQualityAnalyzer.estimateSubjectBounds(roomFrame)
+        assertTrue(bounds.detected)
+        assertFalse(bounds.reliable)
+
+        val tracker = OrientationSectorTracker()
+        val analyzer = LiveFrameQualityAnalyzer(CaptureTargetType.GARMENT)
+        var lastSnap: LiveQualitySnapshot? = null
+        for (i in 0 until 10) {
+            val orient = tracker.updateEulerDegrees(i * 32.0, 2.0)
+            lastSnap = analyzer.analyzeFrame(roomFrame, orient)
+            assertEquals(TrafficLight.GREEN, lastSnap.trafficLight)
+            assertEquals(FramingStatus.MANUAL_GUIDE, lastSnap.framingStatus)
+            assertFalse("不应误报往后退: ${lastSnap.promptText}", lastSnap.promptText.contains("后退"))
+            assertFalse("不应误报太近: ${lastSnap.promptText}", lastSnap.promptText.contains("太近"))
+            assertFalse("徽章不应报后退: ${lastSnap.actionBadge}", lastSnap.actionBadge.contains("后退"))
+        }
+        assertTrue(lastSnap!!.stage1ReadyForCloseup)
+
+        // 阶段 2 在复杂背景下推近仍可点亮领口/袖口检查
+        analyzer.enterStage2Closeup()
+        for (i in 0 until 4) {
+            lastSnap = analyzer.analyzeFrame(roomFrame, tracker.currentSnapshot())
+        }
+        assertTrue(lastSnap!!.missingCloseups.isEmpty())
+
+        val req = analyzer.buildGuideRequest(
+            requestId = "req-garment-room",
+            prep = CapturePrepConfig(targetType = CaptureTargetType.GARMENT, hasScaleReference = true),
+            tracker = tracker
+        )
+        assertEquals(null, req.minMarginPx)
+        assertEquals(null, req.subjectOccupancyMax)
+
+        val diag = DirectDeepSeekCaptureGuide.analyzeMetricsDeterministically(req)
+        val issueCodes = diag.issues.map { it.code }.toSet()
+        assertFalse(issueCodes.contains("edge_cropped"))
+        assertFalse(issueCodes.contains("subject_too_close"))
+    }
+
+    @Test
+    fun `head back-of-head frames without face detection do not trigger false step back`() {
+        val tracker = OrientationSectorTracker()
+        val analyzer = LiveFrameQualityAnalyzer(CaptureTargetType.HEAD)
+        val roomFrame = makeClutteredRoomFrame(480, 640)
+        val goodFace = FaceObservation(
+            leftPx = 150f,
+            topPx = 180f,
+            rightPx = 330f,
+            bottomPx = 360f,
+            eyeDistancePx = 12.0,
+            headEulerAngleYDeg = 0f
+        )
+
+        for (i in 0 until 5) {
+            val orient = tracker.updateEulerDegrees(i * 30.0, 3.0)
+            val snap = analyzer.analyzeFrame(roomFrame, orient, listOf(goodFace))
+            assertEquals(FramingStatus.GOOD, snap.framingStatus)
+        }
+
+        // 绕到后脑勺时人脸检测为空，不应触发“往后退”或污染 stage1 占比
+        for (i in 5 until 10) {
+            val orient = tracker.updateEulerDegrees(i * 30.0, 3.0)
+            val snap = analyzer.analyzeFrame(roomFrame, orient, emptyList())
+            assertEquals(FramingStatus.MANUAL_GUIDE, snap.framingStatus)
+            assertEquals(TrafficLight.GREEN, snap.trafficLight)
+            assertFalse(snap.promptText.contains("后退"))
+        }
+
+        val req = analyzer.buildGuideRequest(
+            requestId = "req-head-back",
+            prep = CapturePrepConfig(targetType = CaptureTargetType.HEAD, hasScaleReference = true),
+            tracker = tracker
+        )
+        assertTrue("Head occMax should stay from reliable face frames <= 0.65, was ${req.subjectOccupancyMax}", req.subjectOccupancyMax!! <= 0.65)
     }
 }

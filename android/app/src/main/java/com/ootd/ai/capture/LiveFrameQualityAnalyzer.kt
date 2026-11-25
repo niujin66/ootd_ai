@@ -39,11 +39,13 @@ data class SubjectFraming(
     val marginLeftPx: Int,
     val marginTopPx: Int,
     val marginRightPx: Int,
-    val marginBottomPx: Int
+    val marginBottomPx: Int,
+    val reliable: Boolean = true
 )
 
 enum class FramingStatus {
     NOT_FOUND,
+    MANUAL_GUIDE,
     TOO_FAR,
     GOOD,
     TOO_CLOSE,
@@ -171,7 +173,7 @@ class LiveFrameQualityAnalyzer(
             lostSubjectFrames += 1
         }
 
-        if (stage == CaptureStage.STAGE_1_OVERVIEW && framing.detected) {
+        if (stage == CaptureStage.STAGE_1_OVERVIEW && framing.detected && framing.reliable) {
             stage1OccupancyMax = max(stage1OccupancyMax, framing.occupancy)
             stage1MinLeft = stage1MinLeft?.let { min(it, framing.marginLeftPx) } ?: framing.marginLeftPx
             stage1MinTop = stage1MinTop?.let { min(it, framing.marginTopPx) } ?: framing.marginTopPx
@@ -192,10 +194,11 @@ class LiveFrameQualityAnalyzer(
                 updateHeadCloseupChecklist(headYawDeg)
             }
         } else if (targetType == CaptureTargetType.GARMENT && stage == CaptureStage.STAGE_2_CLOSEUP) {
-            if (framing.detected && framing.occupancy >= 0.45 && sharpness >= SHARP_OK_THRESHOLD) {
+            if (framing.detected && sharpness >= SHARP_OK_THRESHOLD && (!framing.reliable || framing.occupancy >= 0.45)) {
                 stage2HighDetailFrames += 1
-                // 连续推近高清晰度高占比帧，自动辅助点亮衣料纹理检查；关键结构可协同确认
-                val detailEstPx = min(frame.width, frame.height) * framing.occupancy * 0.08
+                // 连续推近高清晰度帧，自动辅助点亮衣料纹理检查；复杂室内背景下使用保守占比估算细节像素
+                val effOcc = if (framing.reliable) framing.occupancy else 0.60
+                val detailEstPx = min(frame.width, frame.height) * effOcc * 0.08
                 if (detailEstPx > bestRoiDetailPx) {
                     bestRoiDetailPx = detailEstPx
                 }
@@ -333,23 +336,29 @@ class LiveFrameQualityAnalyzer(
     }
 
     private fun evaluateFraming(frame: GrayFrame, face: FaceObservation?): SubjectFraming {
-        if (targetType == CaptureTargetType.HEAD && face != null) {
-            val faceW = max(1f, face.rightPx - face.leftPx)
-            val faceH = max(1f, face.bottomPx - face.topPx)
-            // 由人脸框合理外推头部+肩部可见边界，用于检测左右与头顶留白及远景占比
-            val estLeft = max(0f, face.leftPx - faceW * 0.35f)
-            val estRight = min(frame.width.toFloat(), face.rightPx + faceW * 0.35f)
-            val estTop = max(0f, face.topPx - faceH * 0.30f)
-            val estBottom = min(frame.height.toFloat(), face.bottomPx + faceH * 0.90f)
-            val occ = (((estRight - estLeft) * (estBottom - estTop)) / (frame.width.toFloat() * frame.height.toFloat())).toDouble()
-            return SubjectFraming(
-                detected = true,
-                occupancy = occ.coerceIn(0.0, 1.0),
-                marginLeftPx = estLeft.roundToInt(),
-                marginTopPx = estTop.roundToInt(),
-                marginRightPx = (frame.width - estRight).roundToInt().coerceAtLeast(0),
-                marginBottomPx = (frame.height - estBottom).roundToInt().coerceAtLeast(0)
-            )
+        if (targetType == CaptureTargetType.HEAD) {
+            if (face != null) {
+                val faceW = max(1f, face.rightPx - face.leftPx)
+                val faceH = max(1f, face.bottomPx - face.topPx)
+                // 由人脸框合理外推头部+肩部可见边界，用于检测左右与头顶留白及远景占比
+                val estLeft = max(0f, face.leftPx - faceW * 0.35f)
+                val estRight = min(frame.width.toFloat(), face.rightPx + faceW * 0.35f)
+                val estTop = max(0f, face.topPx - faceH * 0.30f)
+                val estBottom = min(frame.height.toFloat(), face.bottomPx + faceH * 0.90f)
+                val occ = (((estRight - estLeft) * (estBottom - estTop)) / (frame.width.toFloat() * frame.height.toFloat())).toDouble()
+                return SubjectFraming(
+                    detected = true,
+                    occupancy = occ.coerceIn(0.0, 1.0),
+                    marginLeftPx = estLeft.roundToInt(),
+                    marginTopPx = estTop.roundToInt(),
+                    marginRightPx = (frame.width - estRight).roundToInt().coerceAtLeast(0),
+                    marginBottomPx = (frame.height - estBottom).roundToInt().coerceAtLeast(0),
+                    reliable = true
+                )
+            }
+            // 绕到后脑勺等未检测到人脸时，仅保留遮挡/纯黑检测，不用整图边缘去误判“太近/往后退”
+            val bgFallback = estimateSubjectBounds(frame)
+            return if (!bgFallback.detected) bgFallback else bgFallback.copy(reliable = false)
         }
         return estimateSubjectBounds(frame)
     }
@@ -364,6 +373,7 @@ class LiveFrameQualityAnalyzer(
 
     private fun computeFramingStatus(framing: SubjectFraming): FramingStatus {
         if (!framing.detected) return FramingStatus.NOT_FOUND
+        if (!framing.reliable) return FramingStatus.MANUAL_GUIDE
         if (framing.occupancy > OCCUPANCY_MAX_LIMIT) return FramingStatus.TOO_CLOSE
         val minCheckedMargin = if (targetType == CaptureTargetType.HEAD) {
             minOf(framing.marginLeftPx, framing.marginRightPx, framing.marginTopPx)
@@ -438,7 +448,7 @@ class LiveFrameQualityAnalyzer(
                     voiceKey = "lost"
                 )
             }
-            if (framing.occupancy > OCCUPANCY_MAX_LIMIT) {
+            if (framingStatus == FramingStatus.TOO_CLOSE) {
                 return FeedbackDecision(
                     trafficLight = TrafficLight.RED,
                     framingStatus = FramingStatus.TOO_CLOSE,
@@ -468,16 +478,22 @@ class LiveFrameQualityAnalyzer(
             }
             val count = orientation?.coveredCount ?: 0
             val dirHint = suggestWalkDirection(orientation)
-            return if (framingStatus == FramingStatus.TOO_FAR) {
-                FeedbackDecision(
+            return when (framingStatus) {
+                FramingStatus.MANUAL_GUIDE -> FeedbackDecision(
+                    trafficLight = TrafficLight.GREEN,
+                    framingStatus = FramingStatus.MANUAL_GUIDE,
+                    actionBadge = "$dirHint ($count/12)",
+                    promptText = "请目视将目标完整装进中央虚线框（四周留边），迈步$dirHint（已点亮 $count/12 格）",
+                    voiceKey = null
+                )
+                FramingStatus.TOO_FAR -> FeedbackDecision(
                     trafficLight = TrafficLight.GREEN,
                     framingStatus = FramingStatus.TOO_FAR,
                     actionBadge = "往前走一两步",
                     promptText = "目标略远，可稍微走近一两步装满虚线框，同时$dirHint（$count/12 格）",
                     voiceKey = null
                 )
-            } else {
-                FeedbackDecision(
+                else -> FeedbackDecision(
                     trafficLight = TrafficLight.GREEN,
                     framingStatus = FramingStatus.GOOD,
                     actionBadge = "$dirHint ($count/12)",
@@ -688,7 +704,7 @@ class LiveFrameQualityAnalyzer(
             }
 
             if (maxGrad < 20) {
-                return SubjectFraming(false, 0.0, 0, 0, 0, 0)
+                return SubjectFraming(false, 0.0, 0, 0, 0, 0, reliable = true)
             }
 
             val meanGrad = sumGrad.toDouble() / max(1, count)
@@ -700,9 +716,37 @@ class LiveFrameQualityAnalyzer(
             var maxY = -1
             var activeCount = 0
 
+            var leftBorderHit = false
+            var rightBorderHit = false
+            var topBorderHit = false
+            var bottomBorderHit = false
+            var borderCount = 0
+            var borderActiveCount = 0
+            var borderSum = 0.0
+            var borderSumSq = 0.0
+
             for (y in 1 until gh - 1) {
+                val isTopBorder = y <= 3
+                val isBottomBorder = y >= gh - 4
                 for (x in 1 until gw - 1) {
-                    if (grad[y * gw + x] >= threshold) {
+                    val isLeftBorder = x <= 3
+                    val isRightBorder = x >= gw - 4
+                    val isBorder = isTopBorder || isBottomBorder || isLeftBorder || isRightBorder
+                    val active = grad[y * gw + x] >= threshold
+                    if (isBorder) {
+                        borderCount += 1
+                        val lum = grid[y * gw + x].toDouble()
+                        borderSum += lum
+                        borderSumSq += lum * lum
+                        if (active) {
+                            borderActiveCount += 1
+                            if (isLeftBorder) leftBorderHit = true
+                            if (isRightBorder) rightBorderHit = true
+                            if (isTopBorder) topBorderHit = true
+                            if (isBottomBorder) bottomBorderHit = true
+                        }
+                    }
+                    if (active) {
                         activeCount += 1
                         if (x < minX) minX = x
                         if (x > maxX) maxX = x
@@ -713,7 +757,44 @@ class LiveFrameQualityAnalyzer(
             }
 
             if (activeCount < 6 || maxX <= minX || maxY <= minY) {
-                return SubjectFraming(false, 0.0, 0, 0, 0, 0)
+                return SubjectFraming(false, 0.0, 0, 0, 0, 0, reliable = true)
+            }
+
+            val borderActiveSides = listOf(leftBorderHit, rightBorderHit, topBorderHit, bottomBorderHit).count { it }
+            val borderActiveRatio = borderActiveCount.toDouble() / max(1, borderCount)
+            val borderMean = borderSum / max(1, borderCount)
+            val borderStd = sqrt(max(0.0, (borderSumSq / max(1, borderCount)) - borderMean * borderMean))
+
+            // 仅在纯色/干净背景下，梯度外接框才可靠；宿舍等真实室内四边常有门框/家具/地砖强边缘
+            val cleanOtherSidesStd = if (borderActiveSides == 1) {
+                var cleanCount = 0
+                var cleanSum = 0.0
+                var cleanSumSq = 0.0
+                for (y in 1 until gh - 1) {
+                    for (x in 1 until gw - 1) {
+                        val inCleanStrip =
+                            (y <= 3 && !topBorderHit) ||
+                                (y >= gh - 4 && !bottomBorderHit) ||
+                                (x <= 3 && !leftBorderHit) ||
+                                (x >= gw - 4 && !rightBorderHit)
+                        if (inCleanStrip) {
+                            cleanCount += 1
+                            val lum = grid[y * gw + x].toDouble()
+                            cleanSum += lum
+                            cleanSumSq += lum * lum
+                        }
+                    }
+                }
+                val m = cleanSum / max(1, cleanCount)
+                sqrt(max(0.0, (cleanSumSq / max(1, cleanCount)) - m * m))
+            } else {
+                borderStd
+            }
+
+            val reliable = when {
+                borderActiveSides == 0 -> !(borderStd >= 22.0 && borderActiveRatio >= 0.05)
+                borderActiveSides == 1 -> cleanOtherSidesStd < 22.0
+                else -> false
             }
 
             // 注意 x/y 仅到 1..gw-2，若活跃边缘落在最外环 (1 或 gw-2)，映射回贴边 0 像素
@@ -729,7 +810,8 @@ class LiveFrameQualityAnalyzer(
                 marginLeftPx = (leftNorm * frame.width).roundToInt(),
                 marginTopPx = (topNorm * frame.height).roundToInt(),
                 marginRightPx = ((1.0 - rightNorm) * frame.width).roundToInt().coerceAtLeast(0),
-                marginBottomPx = ((1.0 - bottomNorm) * frame.height).roundToInt().coerceAtLeast(0)
+                marginBottomPx = ((1.0 - bottomNorm) * frame.height).roundToInt().coerceAtLeast(0),
+                reliable = reliable
             )
         }
     }

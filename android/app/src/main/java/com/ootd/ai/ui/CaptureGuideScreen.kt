@@ -438,6 +438,15 @@ fun CaptureGuideScreen(
                             stage = CaptureStage.STAGE_2_CLOSEUP
                             speakHint("第 2 步！被拍人像雕塑一样别动，镜头慢慢凑近到 40 厘米拍正脸和侧脸", flush = true)
                         },
+                        onMarkCloseupCompleted = { item ->
+                            analyzer.markCloseupCompleted(item)
+                            qualitySnapshot = qualitySnapshot?.let { snap ->
+                                snap.copy(
+                                    completedCloseups = snap.completedCloseups + item,
+                                    missingCloseups = analyzer.computeMissingCloseups()
+                                )
+                            }
+                        },
                         onFinish = { finishAndInspect() },
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -619,7 +628,8 @@ private fun TopCaptureHud(
             // 3 步流程进度指示条，一眼看清当前在哪一步
             val stepNum = when {
                 stage == CaptureStage.STAGE_2_CLOSEUP -> 3
-                snapshot?.framingStatus == FramingStatus.GOOD && orientation.coveredCount >= 1 -> 2
+                (snapshot?.framingStatus == FramingStatus.GOOD ||
+                    snapshot?.framingStatus == FramingStatus.MANUAL_GUIDE) && orientation.coveredCount >= 1 -> 2
                 else -> 1
             }
             Surface(
@@ -899,6 +909,7 @@ private fun BottomCapturePanel(
     recordingWarmupActive: Boolean,
     cameraBindError: String?,
     onAdvanceToStage2: () -> Unit,
+    onMarkCloseupCompleted: (CloseupCheckId) -> Unit,
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -954,6 +965,7 @@ private fun BottomCapturePanel(
             if (snapshot != null) {
                 val distLabel = when (snapshot.framingStatus) {
                     FramingStatus.GOOD -> "距离合适 ✓"
+                    FramingStatus.MANUAL_GUIDE -> "按虚线框目视对齐"
                     FramingStatus.TOO_FAR -> "偏远 · 可走近点"
                     FramingStatus.TOO_CLOSE -> "太近 · 退一大步"
                     FramingStatus.CROPPED -> "快切边 · 退半步"
@@ -991,7 +1003,7 @@ private fun BottomCapturePanel(
                         val checked = item in done
                         FilterChip(
                             selected = checked,
-                            onClick = { },
+                            onClick = { onMarkCloseupCompleted(item) },
                             label = {
                                 Text(
                                     text = if (checked) "✓ ${item.label}" else "待拍：${item.label}",
