@@ -1,6 +1,6 @@
 # 「3D 采集引导」真机回归证据（2026-11-25 夜）
 
-B 岗任务车 11/25–26 项：真机回归 `main@de055e1` 的采集引导，覆盖五项验收点。
+B 岗任务卡 11/25–26 项：真机回归 `main@de055e1` 的采集引导，覆盖任务卡第 2 条列出的六项验收点。
 
 - 设备：Xiaomi 17 Pro（`25098PN5AC` / `ro.product.name=pandora`），Android 17，序列号 `fe474c80`
 - 被测包：本地从 `main@de055e1` 构建的 debug APK（88,958,052 B）
@@ -19,10 +19,10 @@ B 岗任务车 11/25–26 项：真机回归 `main@de055e1` 的采集引导，�
 | ④ 录像保存到相册 | ✅ 3 个文件全部可解码 | 自写 MP4 容器解析器验证 `moov`/`avc1`，见下 |
 | ⑤ 连后端 `/v1/capture/guide` | ✅ 200 OK | 后端访问日志 + 结果页渲染三步建议 |
 | ⑤ 附带：离线降级 | ✅ 生效且文案完整 | 断链时自动走 `OfflineCaptureDiagnoser`，App 不崩 |
+| ⑥ 直连 DeepSeek 调试 | ✅ 走通并返回真实 AI 建议 | 结果页来源标签「直连 DeepSeek 调试」+ 代码路径唯一，见下 |
 
 **未覆盖**（不算通过，也不该写成通过）：
 
-- **直连 DeepSeek 调试入口**（需真实 API Key，本机未配置；本次只验了「共享/自建后端」与「离线降级」两条路）
 - 暗光、快速旋转、画面里有人走过、极近距离贴脸
 - E01–E04 故障注入场景
 - X05 连续切换 20 件衣物
@@ -165,6 +165,61 @@ App 编译期默认 `OOTD_API_BASE_URL = http://127.0.0.1:8000`、`OOTD_API_TOKE
 
 > 踩坑记录：本机 MSYS 环境下 adb server 会随命令进程退出而消失，导致 `adb reverse` 设置完立刻丢失。需用 `adb nodaemon server` 常驻，并额外挂 watchdog 每 5 秒检查 `adb reverse --list`，断了自动重建。第一次联调失败就是隧道中途掉了，与代码无关。
 
+### ⑥ 直连 DeepSeek 调试（11/26 补测）
+
+11/25 夜缺这个 Key，只验了「后端」和「离线降级」两条路；11/26 21:23 用用户自有 Key 补齐。
+
+配置（App 内「开发者调试 → AI 指导连接方式」）：
+
+| 项 | 值 |
+|---|---|
+| 开关「开启手机直连 DeepSeek API」 | 打开 |
+| API Key | 已填（仅存本机，本证据不记录其值） |
+| API Base URL | `https://api.deepseek.com/v1` |
+| 模型名称 | `deepseek-v4` |
+
+面板状态显示「当前：手机直连 DeepSeek（无需电脑后端）」，说明 `directDeepSeekEnabled` 与 `deepSeekApiKey` 两个前置条件同时满足。
+
+**判定不是靠"看起来像 AI 写的"，而是靠代码路径唯一**。`DirectDeepSeekCaptureGuide.generateGuide()`（`DirectDeepSeekCaptureGuide.kt:47-77`）里 `mode = MODE_DIRECT_AI` 只在一条路径上赋值，且必须四步全过：
+
+1. `apiKey` 去空格后非空（否则抛 `未填写 DeepSeek API Key`）
+2. `httpResp.statusCode in 200..299`（否则抛 `DeepSeek 接口返回错误`）
+3. `extractChatContent()` 从响应体取到内容
+4. `parseAndValidateGuideOutput()` 严格校验通过（含 `invalid_retake` 不得声称 `can_reuse_existing=true` 这类约束）
+
+任一步失败都会抛异常 → `finishAndInspect()` 的 `getOrElse` → `OfflineCaptureDiagnoser.buildFallback()` → `mode = "offline_fallback"`（`CaptureGuideModels.kt:461`），结果页标签就会是别的字样。
+
+**三处独立观测互相印证**：
+
+| 位置 | 观测 |
+|---|---|
+| 准备页面板 | 「当前：手机直连 DeepSeek（无需电脑后端）」 |
+| 分析中状态文案 | 「正在本地整理质检数据，并**直连 DeepSeek** 生成补拍指南…」（`CaptureGuideScreen.kt:312`） |
+| 结果页来源标签 | **「直连 DeepSeek 调试」**（`CaptureGuideScreen.kt:1335`，仅在 `mode == "direct_ai"` 时出现） |
+
+截图见 `result-direct-deepseek.jpg`。
+
+附带结论：`deepseek-v4` 这个模型名**是有效的**——若模型名不存在，`/chat/completions` 会返回 404 并抛异常，走不到 `MODE_DIRECT_AI`。
+
+本次返回的四条建议都带 reason code 与实测数值（`edge_cropped`、`camera_roll_warning 翻滚 41.4°`、`orbit_jump 连续度 -0.594`、`missing_closeups`），扇区覆盖 `12/12`（最大缺口 0°）——即模型确实读到了端侧指标，不是套模板。
+
+### 已知问题：录像 Finalize 报 `error=4`，但文件实际完好
+
+同一次补测中，结果页出现了 `录像保存警告（error=4），分析指标仍已保留`。这条**容易让复测者误判成"录像没存上"**，实际不是。
+
+`error=4` 来自 CameraX `VideoRecordEvent.Finalize.error`（`CaptureGuideScreen.kt:234-239`），语义是 `ERROR_SOURCE_INACTIVE`——录制源已失效，典型触发场景是 `stop()` 之后相机已解绑、Finalize 回调才到。**文件此时已经写完。**
+
+实证：拉出对应两次录制的文件，用 `mp4probe.py` 解析容器：
+
+| 文件 | 大小 | 时长 | 帧数 | 编码 | `moov` |
+|---|---|---|---|---|---|
+| `OOTD_head_20261126_212319.mp4` | 30,790,965 B | 18.70 s | 561 | avc1 | 完整 |
+| `OOTD_head_20261126_212424.mp4` | 4,135,067 B | 2.55 s | 77 | avc1 | 完整 |
+
+两个文件结构完整、可解码。所以这是**UI 层的误报**，不是保存失败：`recordError` 一旦非空就整句显示，没有区分「文件已落盘但状态码非零」这种可忽略情形。
+
+**给 C 复测的提示**：看到这行警告先别判失败，去 `/sdcard/Movies/OOTD-Capture/` 看有没有文件、跑一遍 `mp4probe.py` 再下结论。
+
 ## 复现方法
 
 ```bash
@@ -187,5 +242,6 @@ python mp4probe.py <video.mp4>
 |---|---|
 | `result-offline-fallback.png` | 断链时的降级结果页 |
 | `result-backend-guide.png` | 连上后端时的结果页（三步建议） |
+| `result-direct-deepseek.jpg` | 直连 DeepSeek 的结果页（右上角来源标签为判定依据） |
 | `monitor-10min-1125.csv` | 10 分钟内存/帧数采样原始数据 |
 | `mp4probe.py` | MP4 容器解析脚本（本机无 ffprobe，故自写） |
