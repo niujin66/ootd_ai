@@ -436,7 +436,12 @@ fun CaptureGuideScreen(
                         onAdvanceToStage2 = {
                             analyzer.enterStage2Closeup()
                             stage = CaptureStage.STAGE_2_CLOSEUP
-                            speakHint("第 2 步！被拍人像雕塑一样别动，镜头慢慢凑近到 40 厘米拍正脸和侧脸", flush = true)
+                            val stage2Hint = if (prepConfig.targetType == CaptureTargetType.HEAD) {
+                                "第 2 步！被拍人摘掉眼镜、闭口保持别动，镜头慢慢凑近到 40 厘米拍正脸与左右 30 度侧脸"
+                            } else {
+                                "第 2 步！保持衣物别动，镜头慢慢凑近到 30 到 50 厘米拍清领口、袖口与面料纹理"
+                            }
+                            speakHint(stage2Hint, flush = true)
                         },
                         onMarkCloseupCompleted = { item ->
                             analyzer.markCloseupCompleted(item)
@@ -1095,7 +1100,7 @@ private fun PrepareCaptureContent(
             }
         }
 
-        // 上手 3 步卡，开拍前先看明白
+        // 上手 3 步卡，开拍前先看明白（按头部 / 衣物分别提醒实测防踩坑要点）
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
             modifier = Modifier.fillMaxWidth()
@@ -1105,9 +1110,15 @@ private fun PrepareCaptureContent(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text("3 步完成高质量采集（全程一镜到底，不要按停止）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text("① 退远 1.2–1.5 米：让人头/衣服完整放进屏幕虚线框", style = MaterialTheme.typography.bodySmall)
-                Text("② 缓慢绕一圈：被拍目标别动，连人带手机真正围绕目标走满一圈（别只站在原地扭手腕）", style = MaterialTheme.typography.bodySmall)
-                Text("③ 推近拍特写：点「进入第 2 步」凑到 40 厘米拍正脸与左右耳侧", style = MaterialTheme.typography.bodySmall)
+                if (config.targetType == CaptureTargetType.HEAD) {
+                    Text("① 退远 1.2–1.5 米 · 摘眼镜并避开强逆光：摘掉反光眼镜、闭口静止、长发贴肩，背窗侧向采光更清晰", style = MaterialTheme.typography.bodySmall)
+                    Text("② 25–40 秒匀速绕一圈：连人带手机走完 360°（别原地扭手腕），尽量缩短时长以减少头部晃动", style = MaterialTheme.typography.bodySmall)
+                    Text("③ 推近补五官与双耳：点「进入第 2 步」凑到 40 厘米拍正脸与左右 30° 侧脸（勿说话歪头）", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("① 退远 1.2–1.5 米 · 均匀柔光：将整件衣服完整装进虚线框且四周留白，避免纯黑死暗阴影", style = MaterialTheme.typography.bodySmall)
+                    Text("② 20–30 秒匀速绕一圈：保持衣物垂坠不动，拐角略停半秒防跳帧，走满正/侧/背 360°", style = MaterialTheme.typography.bodySmall)
+                    Text("③ 推近补结构细节：点「进入第 2 步」凑到 30–50 厘米拍清领口、袖口、下摆与面料纹理", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
