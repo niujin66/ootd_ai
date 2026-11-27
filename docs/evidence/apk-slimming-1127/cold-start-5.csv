@@ -1,0 +1,6 @@
+run,total_time_ms,wait_time_ms,note
+1,386,388,cold start after force-stop
+2,354,356,cold start after force-stop
+3,363,365,cold start after force-stop
+4,364,365,cold start after force-stop
+5,356,357,cold start after force-stop

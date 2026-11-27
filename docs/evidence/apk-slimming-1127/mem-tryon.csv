@@ -1,0 +1,11 @@
+metric,value_kb,value_mib,note
+pss_total,279894,273,dumpsys meminfo after 20 switches
+vmhwm,473204,462,/proc/pid/status VmHWM RSS peak
+vmrss,388512,379,/proc/pid/status current RSS
+pss_home,115815,113,dumpsys meminfo on home screen
+native_heap,85244,83,PSS breakdown
+egl_mtrack,46774,46,PSS breakdown
+dex_mmap,39283,38,PSS breakdown
+gl_mtrack,17240,17,PSS breakdown
+so_mmap,14135,14,PSS breakdown
+dalvik_heap,6116,6,PSS breakdown
