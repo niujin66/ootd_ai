@@ -107,3 +107,15 @@ python server/tools/import_candidate.py outputs/fault-fixtures/good        --dry
 python server/tools/import_candidate.py outputs/fault-fixtures/sha-mismatch --dry-run  # exit 1，报 sha256 与 manifest 声明不一致
 python server/tools/import_candidate.py outputs/fault-fixtures/corrupt-glb  --dry-run  # exit 1，报解不了
 ```
+
+## AI 接口 30+20 批量评测（`eval_ai_benchmark.py`）
+
+一键验证 30 条穿搭推荐（Q04-ai）+ 20 条 `/v1/capture/guide` 边界用例，统计 HTTP 200 有效返回率、条件违反率与 P50/P95/Max 耗时并输出 Markdown 表格（不含任何密钥）：
+
+```bash
+# 本地 mock 基线（不连接外部模型）
+./server/.venv/Scripts/python.exe server/tools/eval_ai_benchmark.py
+
+# 指向已开启 OOTD_AI_MODE=ai 的团队共享后端
+./server/.venv/Scripts/python.exe server/tools/eval_ai_benchmark.py --server-url http://<host>:8000 --token <token> --catalog-version fixture-face-04 --md-out outputs/ai-eval-summary.md
+```
