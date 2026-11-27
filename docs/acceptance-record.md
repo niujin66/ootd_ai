@@ -1,5 +1,15 @@
 # 验收记录
 
+## 2026-11-27：共享测试后端上线（鉴权 + AI 模式）与 AI 接口 30+20 真实模型评测（C 侧）
+
+- 共享测试后端：`server/app.py` 以 `OOTD_AI_MODE=ai` 运行，开启 Bearer 令牌鉴权（`OOTD_AUTH_TOKEN`），经 Cloudflare 隧道对外提供免 `adb reverse` 的地址，供全队手机直接联调；模型为 Hy4-flash（腾讯云 TokenHub），评测对数均为真实模型返回（观测 `mode=ai`），非 mock 死规则。
+- 评测工具：主干已合入的 `server/tools/eval_ai_benchmark.py`（30 条推荐 Q04-ai + 20 条采集补拍指导边界用例），对隔离库 `fixture-face-03b`（两衣：top-001 浅色印花短袖、top-002 深蓝翻领 POLO）实跑。
+- 结果（2026-11-27）：
+  - `POST /v1/recommendations`（Q04-ai 30 条：10 浅色 / 10 深色 / 7 无匹配 / 3 抗注入·边界）：HTTP 200 与协议有效率 30/30（100%），条件违反 0 条（0.0%），P50 6257.88 ms / P95 8237.01 ms / Max 8435.51 ms。
+  - `POST /v1/capture/guide`（20 条三态边界：pass 3 / invalid_retake 5 / needs_reshoot 12）：协议有效率 20/20（100%），readiness 判定全中、条件违反 0 条，非法 `can_reuse_existing=true` 0 次、502/503 均为 0，P50 8657.49 ms / P95 15033.41 ms / Max 17940.37 ms。
+- 与 mock 基线对照：mock 规则层耗时毫秒级（P50 3.87 ms / 3.61 ms），真实模型升至秒级，属真实语义推理与 12 扇区质检上下文组装的代价，量级可接受；协议一致性、硬约束（invalid_retake 不得复用）与条件满足率在真实模型下全部达标、零违反。
+- 说明：本轮为 `fixture-face-04` 交付前的 `fixture-face-03b` 两衣库预跑；待 A 交付三衣全身包（含 top-003）后，将按任务卡以 `--expected-garments 3` 导入 `fixture-face-04`，用同一脚本补跑一次横向对比。完整统计已回填《项目测试文档》（表 C/D/E）。
+
 ## 2026-11-23 晚：无引导 vs App 引导头部消融实验（COLMAP + 2DGS）与 1080p 录像升级
 
 基于同一人体头部目标在相同室内环境下实拍两组对比视频（无引导原生相机 `19.65 s` vs App 两段式实时引导 `69.78 s`，原片及抽帧严格留存于隔离目录，不进入仓库），采用完全一致的参数等间隔抽 `60` 帧并运行 `pycolmap 4.2.1`（`SINGLE / SIMPLE_RADIAL / max_num_features=8000`）、`DeepLabV3` 分段质检与 `2DGS`（RTX 5070，`-r 2 --iterations 7000 --eval`）对比：
