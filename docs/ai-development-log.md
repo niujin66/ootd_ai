@@ -70,3 +70,29 @@
   - **定位出的 3 项真实改进点**：① App 录像原用 `Quality.HD`（720p）导致清晰度中位数 `84.79` 低于原生相机 `141.27`；② 起录第 0–1 秒对焦/拿稳前容易出现首帧连续度跳变（`-0.1132`）；③ COLMAP 3D 空间轨迹交叉核验显示引导组仍存在 `90°` 空间空缺，印证「手机陀螺仪朝向 ≠ 3D 空间位置绕行」风险。
 - 采纳改动：在 `CaptureGuideScreen.kt` 将 `QualitySelector` 升级为优先 `Quality.FHD`（1080p）并安全回退、加入 `1200 ms` 自动对焦稳像缓冲后才启动 `MediaStore` 录像，并在引导文案强调「迈步绕行、勿只原地扭手腕」。
 - 验证范围：新版 `app-debug.apk`（`82.06 MB`）编译打包通过，12 类 66 项端侧单测全过（`0.24 s`）；COLMAP + `DeepLabV3` 分段质检 + `2DGS` 7k 步评估脚本全部在隔离目录运行完成；升级 1080p 后的下一轮真机复拍待测。所有个人原视频与抽帧均留存本地隔离目录，不入库。
+
+## 2026-11-25：V9 通用本地 AI 辅助头部重建、采集话术升级与衣物迁移评估
+
+- 任务：在不借助外部闭源云端 3D 生成器的前提下，解决 V8 头部正脸扭曲/眼窝高低不平与后脑勺 `270°` 断崖问题；封装无硬编码通用脚本 `reconstruction/reconstruct_head_v9.py`；优化端云 AI 采集引导话术并评估衣物管线升级。
+- 诊断与方案设计：
+  - 通过将正面锚定帧 3D 双瞳反投影回其他正面帧，定位到此前锁定宿舍背景的 COLMAP 存在 `12–18 px` 活体歪头偏移；后脑勺 `270°` 断崖来自阳台强逆光（清晰度 `28.1` vs 侧后 `275.4`）与 `facing^16` 极端权重。
+  - 采用全本地开源栈组合：`SuperPoint + LightGlue` 纯前景 SfM（`85/85` 全注册、重投影 `1.4267 px`）+ `Meta Sapiens2-Normal-0.4B` 法线先验（面部校准余弦 `0.8697`）+ 2DGS `Face|Hair` 解耦 6-DoF 可微位姿联合微调 + `Lab` 逆光暗部拉回与 `facing^5` 切线法线融合。
+- 本轮落地改动：
+  - 新增 [`reconstruction/reconstruct_head_v9.py`](../reconstruction/reconstruct_head_v9.py)：自动滤糊抽帧、`SIMPLE_RADIAL` 自校准与去畸变、纯图像/法线联合正脸锚定与上三分之一面部解剖带双瞳定位、严格前景掩码防头顶沾边与 `export_glb_guard.py` 扩展剥离；
+  - 升级 [`server/capture_guide.py`](../server/capture_guide.py)、[`DirectDeepSeekCaptureGuide.kt`](../android/app/src/main/java/com/ootd/ai/capture/DirectDeepSeekCaptureGuide.kt) 与 [`CaptureGuideScreen.kt`](../android/app/src/main/java/com/ootd/ai/ui/CaptureGuideScreen.kt)：补充摘眼镜/闭口/控时 25–40 秒/避逆光提示词，并修复阶段 2 衣物模式误播报人脸提示的问题；
+  - 更新 `docs/head-texture-pipeline.md`、`docs/garment-gaussian-mesh.md`、`docs/capture-guidance-design.md`、`reconstruction/README.md` 与 `README.md`。
+- 实测与验证范围：V9 局部对照实测双瞳漂移由 `12–18 px` 降至 `2.62 px`、前景 PSNR `25.95 dB`、`num_boundary_loops = 2`、消除歪脸与 `270°` 死线；后端 Python 自动化 `102` 项测试 `101` 通过 `1` 跳过、Android 12 类 `68` 项单测与 `:app:compileDebugKotlin` 通过、`reconstruct_head_v9.py` 正脸/双瞳锚点自检通过。
+- 补充落地（V9 3 项高收益能力迁入衣物管线）：
+  - 新增 [`reconstruction/reconstruct_garment_v9.py`](../reconstruction/reconstruct_garment_v9.py)：迁移 `SegFormer` 严格零外扩衣物掩码（`upper=(4, 7)` 兼顾长款侧背视角 + `max_hole_ratio=0.25` 闭合兜阴影暗孔 + 空衣架 `GrabCut` 回退）、无裁剪原图 `SuperPoint + LightGlue` 两级配准与 `SIMPLE_RADIAL` 去畸变、`Lab` 逆光暗部拉回 + `facing^5` 无缝 2048 UV 烘焙与 `export_glb_guard.py` Filament 扩展剥离；默认 `--no-da2` 且关闭位姿微调，按需可启用 `--use-da2` / `--enable-pose-refine`。
+  - 隔离冒烟实测（实拍卫衣 `80` 帧选 `76` 清晰帧，仅跑 `extract,priors,sfm`）：`GrabCut` 回退 `0` 帧、面积分布 `[0.3592, 0.5386, 0.8183]`、裤腿/背景零渗漏；Pass 1 纯衣内角点注册 `42/76` 触发自动全图 Pass 2 回退并达 **`76/76 (100%)`** 注册、`6851` 三维点、重投影误差 **`1.3132 px`**。同步更新 `docs/garment-gaussian-mesh.md`、`docs/a-scan-modeling-trial-guide.md`、`reconstruction/README.md` 与 `README.md`。
+
+## 2026-11-26：`top-003` V9.1 实拍重建与「写实全身 Demo」合龙收口
+
+- 任务：完成 A 岗交付 `top-003` 实拍白色短袖印花 T 恤的 V9/V9.1 全流程重建，预裁剪并对齐 V9 真人写实头部供 `person-001_v2` 拼接全身，并将团队分工收敛为 11/30 手机端可演示 Demo。
+- 诊断与方案设计：
+  - 首轮 V9（`--no-da2`）实现 `90/90` Pass 1 一次性全注册（`1.359 px`、`analyze_capture.py --sparse` 12/12 扇区 100% 覆盖、`32.543 dB`），但暴露出纯白前腹低纹理凹凸坑与两侧垂放手臂遮挡带入的棕色竖条。
+  - 升级 V9.1：在 `stage_train` 加入手臂语义 `ignore_mask` 防止侧腰被抠凹并提前法线平滑、`stage_mesh` 采用 `Taubin 12 + Poisson depth=8` 去微碎片、`stage_bake` 屏蔽 `19 px` 膨胀肢体区域并改用 `Open3D RaycastingScene` 加速射线遮挡测试。
+- 本轮落地改动：
+  - 完善 [`reconstruction/reconstruct_garment_v9.py`](../reconstruction/reconstruct_garment_v9.py)（V9.1 遮挡保护、Lab 色彩平衡与 Open3D 射线烘焙提速）并同步修复 [`reconstruction/reconstruct_head_v9.py`](../reconstruction/reconstruct_head_v9.py) 训练/预览与扩边切片细节；
+  - 更新 [`docs/first-week.md`](first-week.md) 与 [`README.md`](../README.md) 明确 11/27–12/7「拼装写实全身（V9 真人头 + 固定裤鞋 + 3 独立上衣 `fixture-face-04`）+ Demo UI 化 + 共享后端」全员分工。
+- 实测与验证范围：`top-003` V9.1 隔离实测在前腹消坑与色温一致性上显著改善（`7.91 MB`、`100,000` 面、`32.439 dB`、`export_glb_guard.py check` 通过）；V9 头部去毛衣裁剪并按 `frame-03130` 对齐 `person-001` 尺度后为 `3.36 MB`（`41,357` 面、四视角朝向准确、零禁用扩展）；代码与文档全量回归后同步推送 `origin/main`。

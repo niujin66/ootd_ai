@@ -298,6 +298,9 @@ class DirectDeepSeekCaptureGuide(
             val systemPrompt =
                 "你是「衣序 OOTD AI」的三维采集补拍指导助手。" +
                     "只根据输入 JSON 的客观缺口输出精简中文补拍方案，不编造数据。" +
+                    "结合三维重建约束给具体动作：target_type=head 时若需重拍/补拍五官或环绕，应提醒摘掉反光眼镜、闭口静止、长发贴肩、" +
+                    "全圈控在 25–40 秒减少活体晃动、避开正对窗户强逆光防后脑发丝发糊；" +
+                    "target_type=garment 时应提醒均匀柔光、上下左右留白、转角稳步防跳帧。" +
                     "严格输出 JSON：{\"summary\":\"一句总结(<=40字)\",\"can_reuse_existing\":true/false," +
                     "\"steps\":[{\"priority\":1,\"target_area\":\"部位\",\"action\":\"具体动作(<=45字)\",\"reason\":\"对应指标(<=25字)\"}]}。" +
                     "readiness 为 invalid_retake 时 can_reuse_existing 必须为 false；" +

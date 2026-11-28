@@ -2,6 +2,15 @@
 
 衣序面向日常穿搭，在 Android 上展示本人的三维人物，根据场合和偏好推荐已有衣物，点击后切换独立三维上衣。
 
+## 2026-11-26 晚收口进度
+
+- **`top-003` V9.1 实拍出模与「写实全身 Demo」合龙排期落地**：在隔离工作区完成 `top-003` 全流程 V9.1 重建（`90/90` 一次性纯衣注册 `1.359 px`、`analyze_capture.py --sparse` 12/12 扇区 100% 覆盖、开启 `DA2` + `Taubin 12` 消除前腹凹凸大坑，导出 `7.91 MB` 清洁 GLB，前景 PSNR `32.439 dB`）；已同步裁剪对齐 V9 真人头部供 A 拼接 `person-001_v2`（真人头 + 固定下装鞋履 + 3 件独立上衣 `fixture-face-04`），详见[11/26 晚合龙分工](docs/first-week.md)。
+
+## 2026-11-25 开发进度
+
+- **纯本地开源 AI 辅助头部重建 V9 跑通并通用化**：在隔离工作区完成量化定位与 V9 消融——采用 `SegFormer` + `SuperPoint+LightGlue` 纯前景 SfM（`85/85` 注册、`1.4267 px`）+ `Meta Sapiens2-Normal-0.4B` 法线先验（面部余弦 `0.8697`）+ 头部解耦 6-DoF 可微位姿对齐，将正脸双瞳重投影漂移从 `12–18 px` 降至 **`2.62 px`**，前景 PSNR **`25.95 dB`**，`num_boundary_loops = 2`，消除歪脸/左眼窝畸变与后脑勺 `270°` 断崖死线。已将通用无硬编码管线封装入 [`reconstruction/reconstruct_head_v9.py`](reconstruction/reconstruct_head_v9.py)。
+- **AI 采集引导话术与衣物 V9 管线迁移落地**：基于 V8/V9 实测同步升级服务端（`server/capture_guide.py`）与 Android 端（`DirectDeepSeekCaptureGuide.kt`、`CaptureGuideScreen.kt`）提示词，修复阶段 2 衣物模式误播报人脸提示问题；并将 V9 的 `SegFormer` 严格衣物掩码（兼容长款与闭合阴影兜孔）、两级 `SuperPoint+LightGlue` 前景 SfM 去畸变及 `facing^5` 逆光拉回烘焙/`export_glb_guard.py` 守护迁入 [`reconstruction/reconstruct_garment_v9.py`](reconstruction/reconstruct_garment_v9.py)，在实拍卫衣 76 清晰帧隔离冒烟中实现 `76/76` 注册（`1.3132 px`）与零背景/裤腿渗漏，详见[服装高斯转网格记录](docs/garment-gaussian-mesh.md)。
+
 ## 2026-11-23 冲刺任务卡（距离 12/7 功能冻结 14 天）
 
 已同步发布 **11 月 23–30 日四人并行冲刺排期**：A 岗试用团队新跑通的「手机引导采集 → 质检 → 2DGS 转网格 → Blender 精修」流程制作 `top-003` 并沉淀耗时/精度对照；B 岗解决 `#44`、完成 Xiaomi 17 Pro 采集引导真机回归、APK 瘦身/性能采样与 R09 生命周期收口；C 岗搭建共享测试后端并完成 Q04-ai 30 条 + 采集接口 20 条量化评测；队长聚焦卫衣接缝/下摆、头部近景突破与重建质量消融研究。详见[当前任务卡](docs/first-week.md)与[A 岗扫描辅助建模实操指南](docs/a-scan-modeling-trial-guide.md)。

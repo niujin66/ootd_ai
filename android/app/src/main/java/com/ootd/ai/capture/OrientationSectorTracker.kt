@@ -6,6 +6,12 @@ import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.sqrt
 
+enum class SectorQuality {
+    UNVISITED,
+    NEEDS_IMPROVEMENT,
+    GOOD
+}
+
 /**
  * 12 扇区环绕覆盖与相机 up 轴翻滚跟踪器（纯 Kotlin 实现，无 Android 依赖，便于 JVM 单测）。
  *
@@ -14,14 +20,18 @@ import kotlin.math.sqrt
  * - 以首帧方位角为 0° 基准计算相对偏航角 ∈ [0, 360)；
  * - |rollDeg| > 20° 触发水平倾斜预警，并记录全过程横滚角绝对值中位数写入 up_roll_median_deg。
  */
-class OrientationSectorTracker {
+class OrientationSectorTracker(
+    private val requireOrbitVerification: Boolean = false
+) {
 
     private var anchorAzimuthDeg: Double? = null
     private var lastValidAzimuthDeg: Double = 0.0
 
     private val sectorsCovered = BooleanArray(SECTOR_COUNT)
+    private val sectorQualities = Array(SECTOR_COUNT) { SectorQuality.UNVISITED }
     private val capturedAngles = mutableListOf<Double>()
     private val rollSamplesAbs = mutableListOf<Double>()
+    private var wristTwistRejectedCount = 0
 
     var latestRelativeAzimuthDeg: Double = 0.0
         private set
@@ -29,12 +39,15 @@ class OrientationSectorTracker {
     var latestRollDeg: Double = 0.0
         private set
 
+    @Synchronized
     fun reset() {
         anchorAzimuthDeg = null
         lastValidAzimuthDeg = 0.0
         sectorsCovered.fill(false)
+        sectorQualities.fill(SectorQuality.UNVISITED)
         capturedAngles.clear()
         rollSamplesAbs.clear()
+        wristTwistRejectedCount = 0
         latestRelativeAzimuthDeg = 0.0
         latestRollDeg = 0.0
     }
@@ -42,6 +55,7 @@ class OrientationSectorTracker {
     /**
      * 从 SensorManager.getRotationMatrixFromVector 得到的 3x3 行主序旋转矩阵更新姿态。
      */
+    @Synchronized
     fun updateFromRotationMatrix(r: FloatArray): OrientationSnapshot {
         require(r.size >= 9) { "旋转矩阵至少需要 9 个元素" }
         // 后置摄像头光轴在设备坐标系为 (0, 0, -1)，映射至世界坐标系 (East, North, Up)
@@ -87,15 +101,15 @@ class OrientationSectorTracker {
     /**
      * 直接以绝对方位角与横滚角更新（供旋转矩阵换算与 JVM 单测复用）。
      */
+    @Synchronized
     fun updateEulerDegrees(rawAzimuthDeg: Double, rollDeg: Double): OrientationSnapshot {
+        val wasAnchored = anchorAzimuthDeg != null
         val anchor = anchorAzimuthDeg ?: rawAzimuthDeg.also { anchorAzimuthDeg = it }
         val relativeDeg = normalize360(rawAzimuthDeg - anchor)
         val sectorIndex = angleToSectorIndex(relativeDeg)
 
-        val isNewSector = !sectorsCovered[sectorIndex]
-        sectorsCovered[sectorIndex] = true
-        if (isNewSector || capturedAngles.isEmpty() || abs(capturedAngles.last() - relativeDeg) >= 5.0) {
-            capturedAngles.add((relativeDeg * 10.0).toInt() / 10.0)
+        if (!requireOrbitVerification || !wasAnchored) {
+            markSectorInternal(sectorIndex, relativeDeg)
         }
 
         latestRelativeAzimuthDeg = relativeDeg
@@ -105,6 +119,58 @@ class OrientationSectorTracker {
         return currentSnapshot()
     }
 
+    /**
+     * 视觉视差验证通过后，正式点亮当前方位角对应的 30° 扇区。
+     */
+    @Synchronized
+    fun commitVerifiedCurrentSector(): OrientationSnapshot {
+        if (anchorAzimuthDeg != null) {
+            val sectorIndex = angleToSectorIndex(latestRelativeAzimuthDeg)
+            markSectorInternal(sectorIndex, latestRelativeAzimuthDeg)
+        }
+        return currentSnapshot()
+    }
+
+    /**
+     * 检测到原地扭手腕（无空间视差）时拒绝点亮当前扇区并累计拦截次数。
+     */
+    @Synchronized
+    fun recordWristTwistRejected(): OrientationSnapshot {
+        wristTwistRejectedCount += 1
+        return currentSnapshot()
+    }
+
+    /**
+     * 综合记录当前帧的扇区观测质量：
+     * - 原地扭手腕拦截或帧质量不达标（模糊/严重逆光/过暗过曝/歪斜）时，若该扇区尚未达标则标为 NEEDS_IMPROVEMENT（黄格），不计入覆盖；
+     * - 仅当质量合格且非扭手腕时才升级为 GOOD（绿格）并计入覆盖。
+     */
+    @Synchronized
+    fun recordSectorObservation(qualityGood: Boolean, rejectedByTwist: Boolean): OrientationSnapshot {
+        if (rejectedByTwist) {
+            wristTwistRejectedCount += 1
+        }
+        if (anchorAzimuthDeg != null) {
+            val sectorIndex = angleToSectorIndex(latestRelativeAzimuthDeg)
+            if (!rejectedByTwist && qualityGood) {
+                markSectorInternal(sectorIndex, latestRelativeAzimuthDeg)
+            } else if (sectorQualities[sectorIndex] == SectorQuality.UNVISITED) {
+                sectorQualities[sectorIndex] = SectorQuality.NEEDS_IMPROVEMENT
+            }
+        }
+        return currentSnapshot()
+    }
+
+    private fun markSectorInternal(sectorIndex: Int, relativeDeg: Double) {
+        val isNewSector = !sectorsCovered[sectorIndex]
+        sectorsCovered[sectorIndex] = true
+        sectorQualities[sectorIndex] = SectorQuality.GOOD
+        if (isNewSector || capturedAngles.isEmpty() || abs(capturedAngles.last() - relativeDeg) >= 5.0) {
+            capturedAngles.add((relativeDeg * 10.0).toInt() / 10.0)
+        }
+    }
+
+    @Synchronized
     fun currentSnapshot(): OrientationSnapshot {
         val coveredFlags = sectorsCovered.copyOf()
         val coveredCount = coveredFlags.count { it }
@@ -115,11 +181,14 @@ class OrientationSectorTracker {
             coveredCount = coveredCount,
             rollDeg = latestRollDeg,
             isRollWarning = abs(latestRollDeg) > ROLL_WARNING_DEG,
-            upRollMedianDeg = computeMedian(rollSamplesAbs)
+            upRollMedianDeg = computeMedian(rollSamplesAbs),
+            wristTwistRejectedCount = wristTwistRejectedCount,
+            sectorQualities = sectorQualities.toList()
         )
     }
 
     /** 返回目前已覆盖各扇区的代表角度（每扇区一个中心角 + 样本），与服务端口径一致。 */
+    @Synchronized
     fun exportCoveredAzimuthDeg(): List<Double> {
         if (capturedAngles.isNotEmpty()) {
             return capturedAngles.toList()
@@ -129,8 +198,10 @@ class OrientationSectorTracker {
             .map { (it * SECTOR_DEG + SECTOR_DEG / 2).toDouble() }
     }
 
+    @Synchronized
     fun exportMissingSectorArcs(): List<String> = summarize().missingArcs
 
+    @Synchronized
     fun summarize(): CaptureSectorSummary {
         val coveredSet = sectorsCovered.indices.filter { sectorsCovered[it] }.toSet()
         return summarizeSectorSet(coveredSet)
@@ -244,8 +315,13 @@ data class OrientationSnapshot(
     val coveredCount: Int,
     val rollDeg: Double,
     val isRollWarning: Boolean,
-    val upRollMedianDeg: Double
+    val upRollMedianDeg: Double,
+    val wristTwistRejectedCount: Int = 0,
+    val sectorQualities: List<SectorQuality> = List(OrientationSectorTracker.SECTOR_COUNT) { SectorQuality.UNVISITED }
 ) {
     val coverageProgress: Float
         get() = coveredCount.toFloat() / OrientationSectorTracker.SECTOR_COUNT
+
+    val weakSectorCount: Int
+        get() = sectorQualities.count { it == SectorQuality.NEEDS_IMPROVEMENT }
 }

@@ -90,3 +90,60 @@ B 取得完整目录后放进自己工作副本的 `outputs/handoff/person-001/f
 公开任务记录编号、代码版本、步骤与结论。内部记录保存照片、模型、测量值、操作录像和输入哈希。参赛的 AI 辅助编程记录需包含提示词要点、采纳内容、人工修改、验证状态和对应提交。
 
 [PIXIE 官方实现](https://github.com/yfeng95/PIXIE)提供模型来源；当前运行使用已配置的本地依赖目录。完整安装与权重获取应遵循官方说明。
+
+---
+
+## 2026-11-28 专项技术深化：端侧视差防扭手腕算法 & Scan-to-Template 多视角纹理迁移
+
+基于 11/23 消融实验与 11/26–27 `top-003` 建模复盘暴露的两处技术缺口，在不碰撞端云对外协议与并行开发分支的前提下，完成了以下两项独立技术优化与闭环验证。
+
+### 1. 端侧「真绕行 vs 原地扭手腕」稀疏光流视差防作弊算法
+
+- **问题根因**：11/23 消融实验证实，仅靠 IMU 偏航角点亮 12 扇区无法区分「原地扭手腕旋转」与「连人带机真正迈步绕行」——前者虽能点亮传感器格数，却会造成真实 3D 相机轨迹 `90°+` 缺口。
+- **实现模块**：
+  - [OrbitParallaxDetector.kt](../android/app/src/main/java/com/ootd/ai/capture/OrbitParallaxDetector.kt)：纯 Kotlin 无第三方依赖。将 `GrayFrame` 下采样为 `64×64` 灰度网格，在中心前景区（4 个 `8×8` 锚点）与左右背景区（6 个 `8×8` 锚点）剔除低纹理区（`std < 8.0`）后，在 `dx ∈ [-10, +10], dy ∈ [-2, +2]` 窗口执行**零均值绝对差（ZMAD）**块匹配（抗自动曝光漂移）。
+  - 物理判据：纯旋转时前景与背景同向等速横移（`parallaxRatio <= 0.35` 且连续 `>= 2` 帧），判为 `WRIST_TWIST_SUSPECTED`；真绕行时目标居中近似静止而背景显著反向平移（`parallaxGapPx >= 1.6`），判为 `TRUE_ORBIT`；低纹理纯色墙面（有效锚点不足）安全降级为 `INSUFFICIENT_TEXTURE` 不误杀。
+  - [OrientationSectorTracker.kt](../android/app/src/main/java/com/ootd/ai/capture/OrientationSectorTracker.kt)：新增 `requireOrbitVerification` 门控开关（默认 `false` 兼容历史逻辑）与 `@Synchronized` 线程保护，并提供 `commitVerifiedCurrentSector()` 与 `recordWristTwistRejected()`。
+  - [LiveFrameQualityAnalyzer.kt](../android/app/src/main/java/com/ootd/ai/capture/LiveFrameQualityAnalyzer.kt) 与 [CaptureGuideScreen.kt](../android/app/src/main/java/com/ootd/ai/ui/CaptureGuideScreen.kt)：阶段 1 开启视差门控，命中扭手腕时拒绝点亮扇区并触发黄灯纠偏提示「别只扭手腕 · 迈步绕行」。
+- **验证结果**：
+  - 新增 [OrbitParallaxDetectorTest.kt](../android/app/src/test/java/com/ootd/ai/capture/OrbitParallaxDetectorTest.kt)（7 项测试：纯旋转识别、真绕行识别、白墙安全降级、曝光偏移鲁棒性、状态恢复、扇区门控与分析器联动）。
+  - Android 编译与全量单测（13 个测试类共 **75 项**）通过（`OK (75 tests)`），`:app:assembleDebug` 构建成功。
+
+### 2. Scan-to-Template 多视角可见性加权纹理迁移管线
+
+- **问题根因**：`top-003` 扫描几何（V9.1 厚度比 `0.543`）未达交付要求而启用标准模板兜底，但扫描帧中已包含高清真实印花与褶皱纹理，直接沿用原模板 UV 无法承载扫描件外观。
+- **实现模块**：[transfer_scan_texture.py](../reconstruction/transfer_scan_texture.py)
+  1. **模板单图 UV 重排**：通过 `xatlas` 为干净模板网格生成单张无重叠 UV，保持原始顶点与包围盒尺寸零漂移。
+  2. **自动空间配准与正背面消歧**：基于相机平均上方向量 `up_scan` 与正面相机方向先验，在 8 个初始偏航角候选上执行两阶段 Open3D ICP 配准，并以 **多视角 2D 掩膜轮廓 IoU + 归一化倒角距离** 选优。
+  3. **多视角自遮挡剔除与两遍抗离群烘焙**：构建 Open3D `RaycastingScene` 检测自遮挡，结合 SegFormer 严格腐蚀掩膜、身体/手臂语义禁区距离加权与高亮帧基准的 Lab 空间光色一致性校准，按 `facing^4.5 × sharpness × spatial_reliability / z^2` 权重完成双遍鲁棒融合。
+  4. **干净种子高斯扩散补洞**：对被遮挡/不可见 UV 内区（如内表面及手臂遮挡侧缝）先腐蚀可信种子掩膜剔除边缘阴影噪点，再结合距离衰减平滑扩散至全衣主底色中位数并外扩 UV 边界，确保有效 UV 区全黑洞率 `0.00%`；导出前经 [export_glb_guard.py](../server/tools/export_glb_guard.py) 剥离并验证 0 禁用扩展。
+- **验证结果**：
+  - 独立合成基准测试 [test_transfer_scan_texture.py](../reconstruction/tests/test_transfer_scan_texture.py) 通过（合成刚体变换对齐轮廓 IoU `> 0.85`、命中率 `> 90%`、黑洞率 `0.0%`、重投影 PSNR `> 22 dB`）。
+  - `top-003` V9.1 真实扫描数据（60 视角）迁移至 `top-001_v2` 模板实测（2048px 贴图输出留存于本地隔离输出目录，未入公开仓库）：
+    - 几何边界漂移 `0.0 m`，GLB 体积 `3.561 MB`（1024px 版 `1.703 MB`），Filament 禁用扩展 `0` 个；
+    - 多视角对齐轮廓 IoU `0.7482`（8 视角重投影评测均值 `0.7711`），有效 UV 命中率 `51.3%`（中位每命中像素观测 `19` 视角），有效 UV 全黑率 `0.00%`；
+    - 8 视角重投影相对原模板基准：PSNR 由 `11.408 dB` 提升至 `16.918 dB`（**`+5.510 dB`**；1024px 版 `18.291 dB / +6.943 dB`），Lab 色差 ΔE 由 `57.00` 降至 `29.77`。
+  - **v2 姿态对齐与对称织纹升级（方案 B）**：
+    - 针对模板 T-pose 平举袖筒与实拍垂臂姿态失配导致的袖筒纹理落空问题，新增纯几何软蒙皮临时下垂采样（`deform_sleeves_soft_lbs`，导出时严格恢复原始 T-pose 几何 `0.0 m` 漂移）、躯干锚定 ICP（`torso_only_icp`）、3D 左右对称纯布料借用（剔除单侧印花防误复制）及无污点高频织纹平铺补全；
+    - `top-003` v2 实测（2048px）：自动检出最佳袖筒下垂角 `72.0°`，配准轮廓 IoU 由 `0.7482` 提升至 **`0.8105`**（8 视角重投影均值 **`0.8234`**），90 分位顶点对齐误差由 `0.3578 m` 降至 **`0.2045 m`**，对称借用补齐 `89,388` 个纯布料像素，袖筒外观明显恢复真实白衣褶皱质感，GLB 体积 `3.61 MB`（0 禁用扩展）。
+    - 新增 `test_soft_lbs_sleeve_drop_and_symmetry_completion` 单测，验证袖筒下垂位移、躯干静止不变与单侧印花防误镜像；`reconstruction/tests` 2 项测试全部通过。
+
+### 3. 采集质量门控增强与局部缺损“增量补拍”闭环优化
+
+为直接从采集端减少侧缝/袖下遮挡与模糊帧污染，并在模型局部缺块或糊片时支持低门槛“补拍即修”，全链路新增两项协同优化：
+
+1. **Android 端防遮挡引导、曝光质检与定向补拍模式**：
+   - [CaptureGuideModels.kt](../android/app/src/main/java/com/ootd/ai/capture/CaptureGuideModels.kt)：新增 `GarmentCapturePosture`（优先推荐 `HANGER` 衣架挂拍防遮挡，支持穿身对比），以及 `ModelDefectRegion` / `ModelDefectKind` 缺损部位映射与 `TargetedReshootPlan`（`CaptureGuideResponse.buildTargetedReshootPlan()` 将 AI 建议缺口/黄格弱区自动映射为定向补拍区，且在 `invalid_retake / canReuseExisting=false` 时严格禁止增量复用）。
+   - [LiveFrameQualityAnalyzer.kt](../android/app/src/main/java/com/ootd/ai/capture/LiveFrameQualityAnalyzer.kt)：新增 `ExposureStatus` / `ExposureSnapshot` / `evaluateExposure`，在灰度帧上实时识别过暗、过曝、高对比逆光等曝光异常并连续 2 帧防抖告警，导出 `frameQualityAcceptableForSector` 作为扇区有效点亮门控。
+   - [OrientationSectorTracker.kt](../android/app/src/main/java/com/ootd/ai/capture/OrientationSectorTracker.kt)：将 12 扇区升级为三色质量分级 `SectorQuality`（未采集 `UNVISITED` 灰 / 模糊或逆光 `NEEDS_IMPROVEMENT` 黄 / 清晰达标 `GOOD` 绿），并新增 `recordSectorObservation` 阻止低质或扭手腕帧误亮绿灯。
+   - [CaptureGuideScreen.kt](../android/app/src/main/java/com/ootd/ai/ui/CaptureGuideScreen.kt)：接入挂拍/穿身筹备选项、局部缺损部位勾选芯片、三色+橙色目标补拍扇区罗盘、逆光/弱区语音与底栏提示；结果页支持根据 `TargetedReshootPlan` 一键按 AI 建议跳转局部定向补拍，录制输出自动加注 `OOTD_patch_` 前缀，全部目标扇区变绿后自动播报完成。
+   - **Android 验证**：[CaptureQualityAndReshootTest.kt](../android/app/src/test/java/com/ootd/ai/capture/CaptureQualityAndReshootTest.kt) 含 8 项单测（曝光识别、逆光防抖、三色升级、部位映射与 AI 建议跳转门控），全量 14 个测试类共 **83 项**单测全部通过，`:app:assembleDebug` 构建成功。
+
+2. **重建端缺损自动诊断与无位姿增量补拍纹理融合**：
+   - [transfer_scan_texture.py](../reconstruction/transfer_scan_texture.py)：`bake_multiview_to_template_uv(..., return_aux=True)` 新增逐像素质量权重图 `quality_map`、视角命中计数 `obs_count_map` 与光色基准 `lab_target`；`diagnose_model_defects` 按外观法向区域（正面、左右侧缝、背面、领口、双袖筒）自动生成 [defect_report.json] 缺块/弱片诊断及推荐补拍扇区，并落盘增量状态包 `transfer_state.npz`。
+   - [refine_texture_with_reshoot.py](../reconstruction/refine_texture_with_reshoot.py)：面向补拍短视频或 `OOTD_patch_` 图片集，支持本地离线 `SegFormer` 自动抠图，基于精确扫描网格射线锚定 + 波前式 BFS 自举 `SuperPoint + LightGlue + PnP RANSAC`（含相机半径异常护栏）恢复无位姿补拍视角，经跨批次 Lab 调色与双遍抗离群融合后执行质量门控更新——缺失洞直接填补、弱区达标提升，原有清晰区零覆盖漂移，并生成 `before_after_4views.png` 与 `patch_diff_map.png`。
+   - **重建端验证**：
+     - 新增端到端合成测试 [test_refine_texture_with_reshoot.py](../reconstruction/tests/test_refine_texture_with_reshoot.py)，`reconstruction/tests` 3 项单测全部通过；
+     - `top-003` 大缺口实测（于隔离输出目录验证，未入公开仓库）：留出背面弧段 `frame-00030..00070`（41 帧）后，`defect_report.json` 自动判别 `back` 为 `missing_patch`（`hit_ratio = 0.3459`，中位 `2.0` 视角）；随后输入 13 张无位姿 `OOTD_patch_` 补拍帧自动抠图并零泄漏融合：**13/13 (100%)** 完成配准（重投影误差 `2.826–4.278 px`），新填补缺失像素 `97,862` 个、质量升级 `51,471` 个，原有清晰区域 `locked_existing_max_drift = 0.0`，`back` 命中率跃升至 **`0.9108`**（中位 `9.0` 视角，状态恢复 `ok`），外表面总命中率由 `0.5775` 提至 `0.8340`，全视角重投影 PSNR 提升 **`+0.241 dB`**（`16.45 -> 16.691 dB`）。
+
+

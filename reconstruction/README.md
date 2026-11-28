@@ -6,6 +6,8 @@
 
 | 文件 | 输入 | 产物 |
 | --- | --- | --- |
+| reconstruct_head_v9.py | 360° 人像视频或抽帧目录 | 零硬编码前景 SfM + 头部 6-DoF 2DGS + 2048 UV/法线贴图 GLB 与 8 视角预览 |
+| reconstruct_garment_v9.py | 360° 衣物视频或抽帧目录 | SegFormer 严格衣物掩码 + 两级 SuperPoint/LightGlue SfM + 2DGS + 逆光拉回/2048 UV GLB（自动走 `export_glb_guard.py`）与 8 视角预览 |
 | run_pixie_mesh.py | 单张全身照片 | 原姿势和 T 姿势 GLB/OBJ、运行记录 |
 | tune_shape_pixie.py | 全身照片、身高、扫描参数 | 同尺度截面测量及体型候选 |
 | export_person_asset.py | 人物 GLB、可选身高 | 脚底归零的 GLB 和变换记录 |
@@ -54,6 +56,18 @@ $env:OOTD_PIXIE_ROOT = 'C:\your-licensed-model-directory'
 ```
 
 `--output-dir` 必须是不存在的新目录，脚本不会覆盖已有实验结果。
+
+### V9 本地 AI 辅助头部与衣物重建
+
+本机安装 PyTorch CUDA、`transformers`、`pycolmap`、`open3d`、`xatlas`、`trimesh` 与 `2D Gaussian Splatting` 后，可使用零硬编码通用脚本一键运行头部或衣物三维重建（产出默认写入隔离输出目录，避免个人数据入库）：
+
+```powershell
+# 头部 V9 全流程（视频或抽帧目录）
+python .\reconstruction\reconstruct_head_v9.py --video .\local-data\head\orbit.mp4 --output-dir .\outputs\head-v9
+
+# 衣物 V9 全流程（可选 --garment-part upper|dress|lower|all；默认 --no-da2 与关闭刚体位姿微调）
+python .\reconstruction\reconstruct_garment_v9.py --images-dir .\local-data\garment\orbit-images --output-dir .\outputs\garment-v9 --garment-part upper
+```
 
 ### 包和预览
 

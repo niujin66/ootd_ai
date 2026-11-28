@@ -1,5 +1,18 @@
 # 当前任务卡：11 月 23–30 日冲刺（距 12/7 功能冻结 14 天）
 
+> **2026-11-27 晚合龙更新（11/27 – 12/7「写实全身 Demo」收口方案）**：截至 11/27 晚，进展大幅超预期——① **A（[`#13`](https://github.com/niujin66/ootd_ai/issues/13)）已提前交出 `fixture-face-04` 三衣全身包**（`6.69 MB`，含 `person-001_v2.glb` 4.03 MB 与长袖兜底 `top-003.glb` 1.08 MB，门禁 4/4 clean）；② **C 已起好共享测试后端（`Hy4-flash` / `OOTD_AI_MODE=ai`）并由队长合入 PR #48（`03b` A×C 双签正式闭合）与 PR #49（30+20 真实 AI 评测 50/50 有效、0 违反回填测试文档表 C/D/E）**；③ 队长已完成 **6 张脱敏高清配图**（`docs/figures/fig1~fig6.png`，含真实 COLMAP 消融轨道）、**5 份参赛 Word 图表与口径同步**及 **[Demo 录屏分镜与答辩 PPT 大纲](demo-and-defense-kit.md)**。**当前只剩最后两步合龙：C 用 `--expected-garments 3` 导入 `fixture-face-04`，B 交瘦身且支持 3 衣横向切换的 APK，即可在 11/30 录真机全身 Demo**：
+> - **核心决策——「拼装写实全身」（已完成资产产出）**：不改后端/端侧多槽位协议、不搞易重影的一体全身 2DGS；A 已在 Blender 将预对齐 **V9 真人写实头部**（`3.36 MB`）接到 `person-001` 躯干并配深色长裤+休闲鞋（`person-001_v2.glb`，`4.03 MB`），与 `top-001`、`top-002`、`top-003` 合成 **`fixture-face-04`**。
+> - **A · VowVole（11/28–29 收尾）**：① `fixture-face-04` 已于 11/27 产出过门禁（见 `#13`），**确认资产压缩包已私发 C**；② **11/29** 按已确认口径补齐 [top-003 对比表](modeling-comparison-top003.md)（扫描列写「本次扫描未达可交付质量，改走模板兜底」，如实标注实物短袖与防撞衫长袖版区别及分段耗时）。
+> - **B · Journey668（11/27–29，当前主推进项）**：`edae995` 已收尾采集引导回归；接下来聚焦「参赛级 Demo」打磨——① 首页/试衣页 UI 美化、**把 `TryOnScreen.kt` 底部改为支持 3 件及以上衣物的横向列表（`LazyRow`）并将「拉取目录」等调试入口收入右上角菜单**（数据层已确认原生支持 3 衣）、采集引导结束页直接显示 AI 质检卡片；② `arm64-v8a` ABI 分包瘦身（将 `82 MB` 压至 `< 40 MB`）、冷启动 5 次 / 换衣 20 次 / 峰值内存采样与 R09 收口。
+> - **C · uniquebugle-stack（11/28–30，就差 3 衣导入与收尾复跑）**：
+>   - ① **已完成（11/27）**：共享测试后端上线（`Hy4-flash`）、`03b` 双签闭合（PR #48）、`03b` 下 30+20 AI 实测 50/50 零违反回填测试文档（PR #49）；
+>   - ② **11/28–29 导入 `fixture-face-04`（注意必须传 `--expected-garments 3`！）**：`server/validate_asset_package.py` 与 `server/import_package.py` 默认校验 2 件上衣，收到 A 的三衣包后务必显式加 `--expected-garments 3` 并核对 `content_digest = 92036d7ac113...`：
+>     `./server/.venv/Scripts/python.exe server/validate_asset_package.py <fixture-face-04目录> --expected-garments 3`
+>     `./server/.venv/Scripts/python.exe server/import_package.py <fixture-face-04目录> --expected-garments 3`
+>   - ③ **11/29–30 复跑三衣对比与真机验收**：导入后用一键脚本补跑一次 `fixture-face-04` 横向对比，并配合 B 最新 APK 完成全身 3 衣真机全链路验收：
+>     `./server/.venv/Scripts/python.exe server/tools/eval_ai_benchmark.py --server-url http://<host>:8000 --token <token> --catalog-version fixture-face-04 --md-out outputs/ai-eval-summary.md`
+> - **队长 · niujin66（11/27–30）**：已合入 PR #48/#49，完成 6 张脱敏高清配图（含真实 COLMAP 消融轨道）、5 份官方参赛 Word 图表回填与 [Demo 录屏/答辩清单](demo-and-defense-kit.md)；11/28–29 盯紧 C 导入 3 衣包与 B 出瘦身 APK，11/30 晚组织真机联调并照分镜录完首版全身 Demo 视频，12/1–7 冻结后重打纯净源码包与定稿交件。
+
 更新于 2026-11-23（北京时间）。`main@16d9a50` 已合入 PR #45（03b 四视角预检证据）与 PR #46（Android 端两段式实时采集引导 + 手机直连 DeepSeek 调试入口）。本轮紧扣 **12/7 功能冻结、12/14 提交包复验、12/15 参赛提交**，把 **A 的「新建模方法实操产出 `top-003`」**、**B 的「大字号修复 + 新端真机打磨 + 性能/APK瘦身 + 多衣列表」** 与 **C 的「共享测试后端 + AI 30/20 用例量化压测 + 整包验收」** 并行拉满，将队长解放出来主攻核心建模与 AI 辅助研究。
 
 ## 本轮四人并行排期总览
@@ -16,8 +29,8 @@
 | 节点 | 门禁内容 | 判定标准与保底措施 |
 | --- | --- | --- |
 | **11/24** | `03b` 两衣与 `#44` 清零 | A×C 在 `acceptance-record.md` 闭合两衣四视角判定；B 交 `#44` 修复 PR；C 复跑后端 102 项通过。 |
-| **11/26 晚** | `top-003` 初模评估闸门 | 已出 2DGS 初模并判断可行性：可控则扫描直修，破损过大立即切「扫描参考 + Blender 模板」保底。 |
-| **11/28 晚** | 3 衣包 `fixture-face-04` 交接 | 含 `top-003.glb` 且过 `export_glb_guard.py check`，正式交 C 隔离导入。 |
+| **11/26 晚** | `top-003` 初模评估闸门（已执行止损） | 已完成 2DGS 初模评估并正式切换 B 路线「扫描参考 + Blender 模板兜底」（`albedo_2048.png` 黑区 `0%`，合包器 4/4 试运行通过）。 |
+| **11/28 晚** | 3 衣全身包 `fixture-face-04` 交接 | 含 `person-001_v2.glb` 与 `top-003.glb`（过 `export_glb_guard.py check`）交 C；C 使用 `--expected-garments 3` 校验并隔离导入。 |
 | **11/30 晚** | 三衣上手机 & AI 全链路联调 | 手机端展示 3 件真实上衣；Q04-ai 30 条、引导接口 20 条、采集消融对比（含轨迹核验）数据全部落盘。 |
 | **12/7** | 主要功能冻结 | 冻结端/云代码与演示资产包版本，转入 12/14 提交包复验与 12/15 参赛提交。 |
 

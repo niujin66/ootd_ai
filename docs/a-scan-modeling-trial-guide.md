@@ -68,7 +68,7 @@
 为防止环境配置挤占冲刺时间，按 A 手头设备条件直接分流：
 
 - **分支 A（本机有 NVIDIA CUDA 显卡）**：
-  参考[服装高斯转网格记录](garment-gaussian-mesh.md)既有流程执行：`COLMAP` 相机对齐（如用均匀抽帧 + 加密转角采样）→ 语义掩膜提取（注意清除裤腿/背景误收，参考第 33 轮经验）→ `2DGS` 训练与深度融合导出三角网格（避免分位数过严截平帽顶/肩线，参考第 43 轮经验）。
+  参考[服装高斯转网格记录](garment-gaussian-mesh.md)既有流程执行：可直接调用一站式通用脚本 [`reconstruction/reconstruct_garment_v9.py`](../reconstruction/reconstruct_garment_v9.py)（内含模糊抽帧、`SegFormer` 严格零外扩衣物掩码与内孔修补、`SuperPoint + LightGlue` 两级配准去畸变、`2DGS` 训练、TSDF/Poisson 抽壳、逆光拉回 + `facing^5` 烘焙与 `export_glb_guard.py` 扩展剥离；默认关闭 `DA2` 与刚体位姿微调以保真人穿着/平铺布料形状），或按原脚本手工分步运行；随后用 Blender 补齐领口/袖口/下摆共用边封口并避开截平帽顶/肩线（参考第 42–45 轮经验）。
 - **分支 B（本机无 CUDA 显卡或环境配置超过 2 小时未通）**：
   **立即止损**：于 **11/25 晚前**将已通过第 2 步质检的 MP4 与尺度参考照片通过团队内部渠道传给队长（`@niujin66`）。由队长在本地 GPU 环境跑出 `2DGS` 原始三角网格（OBJ/GLB）及基准相机对照图回传给 A，A 直接进入第 4 步精修。
 

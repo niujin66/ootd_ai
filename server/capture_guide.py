@@ -394,30 +394,30 @@ def _default_action_for_issue(issue: dict[str, Any], target_type: str) -> str:
     code = issue["code"]
     if code in ("azimuth_severe_gap", "azimuth_partial_gap"):
         if target_type == "head":
-            return "保持头部静止直视前方，相机在 0.8–1.2 m 距离匀速补拍缺失角度并覆盖正后方与左右侧。"
-        return "保持衣物褶皱固定不动，绕人台每 30° 补拍缺失角度，确保正/侧/背完整闭环。"
+            return "摘掉反光眼镜、闭口保持头部静止，在 0.8–1.2 m 均匀柔光下 25–40 秒内匀速走完缺失角度（避开正对窗户强逆光）。"
+        return "保持衣物垂坠褶皱固定，在柔和漫射光下绕行每 30° 补拍缺失角度，转角略停确保正/侧/背完整闭环。"
     if code in ("camera_roll_severe", "camera_roll_warning"):
         return "开启手机网格参考线并双手持稳，全程保持手机水平不翻滚，重新绕拍一圈。"
     if code in ("edge_cropped", "edge_tight_margin"):
         if target_type == "head":
-            return "将镜头后撤至 0.8–1.2 米，确保头顶与左右双耳四周留有安全边距、不贴边裁切。"
-        return "向后退半步或切换 1× 焦段，确保上下左右四周保留至少 80 px 留白，勿裁切衣摆/袖口/头顶。"
+            return "将镜头后撤至 0.9–1.2 米，确保头顶发冠与左右双耳四周留有 40 px 以上安全边距、不贴边裁切。"
+        return "向后退半步或切换 1× 焦段，确保上下左右四周保留至少 80 px 留白，勿裁切衣摆/袖口/领口。"
     if code == "subject_too_close":
-        return "镜头距离过近，向后退至 0.8–1.2 米使人物/主体完整处于取景框中央（占比控制在 35%–55%）。"
+        return "镜头距离过近，向后退至 0.9–1.3 米使人物/主体完整处于取景框中央（占比控制在 35%–55%）。"
     if code == "subject_lost_frames":
-        return "拍摄时保持人物头部始终位于取景框中央，匀速小步绕拍，切勿贴近至局部遮满镜头。"
+        return "拍摄时保持主体始终位于取景框中央，匀速小步绕拍，切勿贴近至局部遮满镜头。"
     if code in ("blur_severe", "blur_moderate"):
-        return "增加环境柔光并放慢环绕速度，在每个关键角度略停 0.5 秒待对焦稳定后再移动。"
+        return "在均匀室内柔光下放慢环绕速度，双手持稳并在每个关键角度略停 0.5 秒待对焦稳定后再移动。"
     if code == "orbit_jump":
         return "降低相机移动速度，在拐角和侧背交界处加密停顿拍摄，避免画面跳变。"
     if code in ("roi_resolution_critical", "roi_resolution_low"):
         if target_type == "head":
-            return "靠近至 40–60 cm 补充正面与左右斜侧 30° 眼部清晰特写，保持中性闭口表情、避免眼窝硬阴影。"
-        return "靠近至 30–50 cm 对领口、袖口、腋下与下摆各补拍一正一斜两张清晰近景。"
+            return "不佩戴反光眼镜且保持闭口静止，靠近至 40–60 cm 补充正面与左右 30° 侧脸眼部高清特写（避开硬阴影）。"
+        return "靠近至 30–50 cm 对领口、肩线、袖口、腋下与下摆各补拍一正一斜两张清晰近景。"
     if code == "missing_scale_reference":
-        return "在主体旁放置已知尺寸的卷尺或 ArUco 标定卡，补拍 1–2 张刻度清晰可见的参照图。"
+        return "在主体旁放置已知尺寸的卷尺或 A4 纸/ArUco 标定卡，补拍 1–2 张刻度清晰可见的参照图。"
     if code in ("low_registration_ratio", "moderate_registration_ratio"):
-        return "使用纯色哑光背景并锁定曝光/白平衡，增大相邻视角重叠度（每次转动不超过 20°–30°）。"
+        return "避免强逆光与大面积纯黑死暗背景，锁定曝光/白平衡并增大相邻视角重叠度（每次转动不超过 20°–30°）。"
     if code == "missing_closeups":
         return f"补充缺失部位近景特写（{issue['detail']}），对焦点打在结构边缘线上。"
     return "按提示复查拍摄条件后补充采集。"
@@ -466,6 +466,9 @@ def build_capture_guide_prompt(diagnosis: dict[str, Any]) -> list[dict[str, str]
     system = (
         "你是「衣序 OOTD AI」的三维采集补拍指导助手。"
         "只根据输入 JSON 的客观缺口输出精简中文补拍方案，不编造数据。"
+        "结合三维重建约束给具体动作：target_type=head 时若需重拍/补拍五官或环绕，应提醒摘掉反光眼镜、闭口静止、长发贴肩、"
+        "全圈控在 25–40 秒减少活体晃动、避开正对窗户强逆光防后脑发丝发糊；"
+        "target_type=garment 时应提醒均匀柔光、上下左右留白、转角稳步防跳帧。"
         "严格输出 JSON：{\"summary\":\"一句总结(<=40字)\",\"can_reuse_existing\":true/false,"
         "\"steps\":[{\"priority\":1,\"target_area\":\"部位\",\"action\":\"具体动作(<=45字)\",\"reason\":\"对应指标(<=25字)\"}]}。"
         "readiness 为 invalid_retake 时 can_reuse_existing 必须为 false；"

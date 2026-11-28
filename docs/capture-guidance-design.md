@@ -133,3 +133,12 @@ flowchart LR
 2. **性能开销**：`ImageAnalysis` 开启后预览稳定 `≥ 24 FPS`，10 分钟无内存泄漏或 OOM。
 3. **协议与离线降级**：服务端离线或超时（503）时，端侧可展示基于本地 `covered_azimuth_deg` 与 `sharpness_p50` 的基础缺失提示，不丢失已录视频。
 4. **打包体积与既有回归**：新增依赖后 APK 体积增量与既有 49 项单测、试衣渲染页零回归。
+
+---
+
+## 5. 2026-11-25 更新：V8/V9 头部重建实测反哺采集引导话术升级
+
+在 11/25 本地 V8/V9 头部重建对比实验中，我们发现两类直接影响 3D 几何质量的物理源头限制，并同步回写到服务端与 Android 端引导话术：
+1. **长时拍摄活体微晃**（113 秒视频测出 12–18 px 歪头位移）→ 头部开拍前准备卡与 AI 提示词明确引导「**25–40 秒内走完一圈、闭口保持静止、不要佩戴反光眼镜、长发贴肩**」。
+2. **正对窗户强逆光压糊后脑勺细节**（逆光后脑勺清晰度方差低至 `28.1–61.2`）→ 明确提醒「**避开正对窗户强逆光，选用均匀室内侧向采光**」。
+3. **修复阶段 2 模式话术一致化**：修正了 `CaptureGuideScreen.kt` 进入第 2 步推近时无论头部/衣物都播报人脸提示的问题，现已严格区分 `HEAD`（40 cm 正脸与左右 30° 侧脸）与 `GARMENT`（30–50 cm 领口/袖口/下摆纹理），并同步更新了 [server/capture_guide.py](../server/capture_guide.py) 与 [DirectDeepSeekCaptureGuide.kt](../android/app/src/main/java/com/ootd/ai/capture/DirectDeepSeekCaptureGuide.kt)。

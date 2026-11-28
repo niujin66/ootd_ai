@@ -98,13 +98,20 @@ import com.ootd.ai.capture.CaptureStage
 import com.ootd.ai.capture.CaptureTargetType
 import com.ootd.ai.capture.CloseupCheckId
 import com.ootd.ai.capture.DirectDeepSeekCaptureGuide
+import com.ootd.ai.capture.ExposureStatus
 import com.ootd.ai.capture.FramingStatus
+import com.ootd.ai.capture.GarmentCapturePosture
 import com.ootd.ai.capture.LiveFrameQualityAnalyzer
 import com.ootd.ai.capture.LiveQualitySnapshot
+import com.ootd.ai.capture.ModelDefectKind
+import com.ootd.ai.capture.ModelDefectRegion
 import com.ootd.ai.capture.OfflineCaptureDiagnoser
+import com.ootd.ai.capture.OrbitMotionState
 import com.ootd.ai.capture.OrientationSectorTracker
 import com.ootd.ai.capture.OrientationSnapshot
 import com.ootd.ai.capture.RotationSensorBridge
+import com.ootd.ai.capture.SectorQuality
+import com.ootd.ai.capture.TargetedReshootPlan
 import com.ootd.ai.capture.TrafficLight
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -161,8 +168,9 @@ fun CaptureGuideScreen(
     var stage by remember { mutableStateOf(CaptureStage.PREPARE) }
     var voiceEnabled by remember { mutableStateOf(true) }
     var targetGapSectors by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var lastWeakSectors by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
-    val tracker = remember { OrientationSectorTracker() }
+    val tracker = remember { OrientationSectorTracker(requireOrbitVerification = true) }
     var analyzer by remember(prepConfig.targetType) {
         mutableStateOf(LiveFrameQualityAnalyzer(prepConfig.targetType))
     }
@@ -212,7 +220,8 @@ fun CaptureGuideScreen(
     }
 
     fun beginMediaStoreRecording(vc: VideoCapture<Recorder>) {
-        val name = "OOTD_${prepConfig.targetType.apiValue}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
+        val prefix = if (prepConfig.isTargetedReshoot) "OOTD_patch" else "OOTD"
+        val name = "${prefix}_${prepConfig.targetType.apiValue}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
@@ -283,8 +292,24 @@ fun CaptureGuideScreen(
         pendingRecordStart = false
         recordingWarmupActive = false
         beginMediaStoreRecording(vc)
-        speakHint("第 1 步，退远一点把目标装进虚线框，连人带手机真正绕着目标走一圈", flush = true)
+        val startVoice = if (prepConfig.isTargetedReshoot && targetGapSectors.isNotEmpty()) {
+            val regionTips = prepConfig.defectRegions
+                .joinToString("、") { it.label }
+                .ifBlank { "${targetGapSectors.size} 个建议方向" }
+            "局部定向补拍开始，重点补齐：$regionTips，慢速绕过橙色提示格"
+        } else if (prepConfig.targetType == CaptureTargetType.GARMENT) {
+            if (prepConfig.garmentPosture == GarmentCapturePosture.HANGER) {
+                "第 1 步，衣架挂拍远离 1.2 米，慢速绕走一圈"
+            } else {
+                "第 1 步，请被拍人微抬双臂露出侧缝，连人带手机真正绕着走一圈"
+            }
+        } else {
+            "第 1 步，退远一点把目标装进虚线框，连人带手机真正绕着目标走一圈"
+        }
+        speakHint(startVoice, flush = true)
     }
+
+    var targetedPatchCompletedSpoken by remember { mutableStateOf(false) }
 
     fun startRecordingSession(gapIndices: Set<Int> = emptySet()) {
         tracker.reset()
@@ -294,13 +319,22 @@ fun CaptureGuideScreen(
         savedVideoUri = null
         recordError = null
         guideResult = null
-        targetGapSectors = gapIndices
+        targetedPatchCompletedSpoken = false
+        val effectiveGaps = if (gapIndices.isNotEmpty()) gapIndices else if (prepConfig.isTargetedReshoot) {
+            prepConfig.resolvedTargetSectors()
+        } else {
+            emptySet()
+        }
+        targetGapSectors = effectiveGaps
         pendingRecordStart = true
         recordingWarmupActive = true
         stage = CaptureStage.STAGE_1_OVERVIEW
     }
 
     fun finishAndInspect() {
+        lastWeakSectors = orientationSnapshot.sectorQualities
+            .mapIndexedNotNull { idx, q -> if (q == SectorQuality.NEEDS_IMPROVEMENT) idx else null }
+            .toSet()
         pendingRecordStart = false
         recordingWarmupActive = false
         runCatching { activeRecording?.stop() }
@@ -389,7 +423,23 @@ fun CaptureGuideScreen(
                             videoCapture = vc
                         },
                         onBindError = { msg -> cameraBindError = msg },
-                        onQualitySnapshot = { snap -> qualitySnapshot = snap }
+                        onQualitySnapshot = { snap ->
+                            qualitySnapshot = snap
+                            if (stage == CaptureStage.STAGE_1_OVERVIEW && !recordingWarmupActive) {
+                                val updatedOrient = tracker.recordSectorObservation(
+                                    qualityGood = snap.frameQualityAcceptableForSector,
+                                    rejectedByTwist = snap.orbitMotionState == OrbitMotionState.WRIST_TWIST_SUSPECTED
+                                )
+                                orientationSnapshot = updatedOrient
+                                if (targetGapSectors.isNotEmpty() &&
+                                    !targetedPatchCompletedSpoken &&
+                                    targetGapSectors.all { updatedOrient.coveredSectors[it] }
+                                ) {
+                                    targetedPatchCompletedSpoken = true
+                                    speakHint("定向补拍角度已全部采集达标，可以点击结束用于增量融合优化", flush = true)
+                                }
+                            }
+                        }
                     )
 
                     // 顶部：返回、3步流程进度条、12扇区紧凑罗盘与静音开关
@@ -426,17 +476,26 @@ fun CaptureGuideScreen(
                     )
 
                     // 底部：大白话实时提示、三项状态速览与两阶段按钮
+                    val targetedPatchDone = targetGapSectors.isNotEmpty() &&
+                        targetGapSectors.all { orientationSnapshot.coveredSectors[it] }
                     BottomCapturePanel(
                         stage = stage,
                         targetType = prepConfig.targetType,
                         orientation = orientationSnapshot,
                         snapshot = qualitySnapshot,
+                        targetedReshootMode = prepConfig.isTargetedReshoot && targetGapSectors.isNotEmpty(),
+                        targetedPatchDone = targetedPatchDone,
                         recordingWarmupActive = recordingWarmupActive,
                         cameraBindError = cameraBindError,
                         onAdvanceToStage2 = {
                             analyzer.enterStage2Closeup()
                             stage = CaptureStage.STAGE_2_CLOSEUP
-                            speakHint("第 2 步！被拍人像雕塑一样别动，镜头慢慢凑近到 40 厘米拍正脸和侧脸", flush = true)
+                            val stage2Hint = if (prepConfig.targetType == CaptureTargetType.HEAD) {
+                                "第 2 步！被拍人摘掉眼镜、闭口保持别动，镜头慢慢凑近到 40 厘米拍正脸与左右 30 度侧脸"
+                            } else {
+                                "第 2 步！保持衣物别动，镜头慢慢凑近到 30 到 50 厘米拍清领口、袖口与面料纹理"
+                            }
+                            speakHint(stage2Hint, flush = true)
                         },
                         onMarkCloseupCompleted = { item ->
                             analyzer.markCloseupCompleted(item)
@@ -477,8 +536,12 @@ fun CaptureGuideScreen(
             CaptureStage.RESULT -> {
                 val resp = guideResult
                 if (resp != null) {
+                    val reshootPlan = remember(resp, lastWeakSectors) {
+                        resp.buildTargetedReshootPlan(lastWeakSectors)
+                    }
                     CaptureResultContent(
                         response = resp,
+                        reshootPlan = reshootPlan,
                         savedVideoUri = savedVideoUri,
                         recordError = recordError,
                         onSpeakResult = {
@@ -491,10 +554,16 @@ fun CaptureGuideScreen(
                             speakHint(text, flush = true)
                         },
                         onRetakeMissingArcs = {
-                            val missingIndices = OrientationSectorTracker.parseGapSectorIndices(
-                                resp.diagnosis.sectorSummary.missingArcs
+                            prepConfig = prepConfig.copy(
+                                isTargetedReshoot = true,
+                                defectRegions = reshootPlan.inferredRegions,
+                                defectKind = reshootPlan.inferredDefectKind
                             )
-                            startRecordingSession(gapIndices = missingIndices)
+                            startRecordingSession(gapIndices = reshootPlan.targetSectors)
+                        },
+                        onStartFullRetake = {
+                            prepConfig = prepConfig.copy(isTargetedReshoot = false)
+                            startRecordingSession(gapIndices = emptySet())
                         },
                         onRestartFull = { stage = CaptureStage.PREPARE },
                         onBackHome = onBack
@@ -717,11 +786,15 @@ private fun CompactSectorCompass(
                 for (sector in 0 until OrientationSectorTracker.SECTOR_COUNT) {
                     val startAngle = -90f + sector * 30f + 2.5f
                     val sweep = 25f
-                    val isCovered = orientation.coveredSectors[sector]
+                    val quality = orientation.sectorQualities.getOrElse(sector) {
+                        if (orientation.coveredSectors[sector]) SectorQuality.GOOD else SectorQuality.UNVISITED
+                    }
+                    val isCovered = quality == SectorQuality.GOOD || orientation.coveredSectors[sector]
                     val isTargetGap = sector in targetGapSectors && !isCovered
                     val color = when {
                         isCovered -> Color(0xFF4CAF50)
-                        isTargetGap -> Color(0xFFFFB300)
+                        isTargetGap -> Color(0xFFFF9800)
+                        quality == SectorQuality.NEEDS_IMPROVEMENT -> Color(0xFFFFF176)
                         else -> Color.White.copy(alpha = 0.25f)
                     }
                     drawArc(
@@ -906,6 +979,8 @@ private fun BottomCapturePanel(
     targetType: CaptureTargetType,
     orientation: OrientationSnapshot,
     snapshot: LiveQualitySnapshot?,
+    targetedReshootMode: Boolean,
+    targetedPatchDone: Boolean,
     recordingWarmupActive: Boolean,
     cameraBindError: String?,
     onAdvanceToStage2: () -> Unit,
@@ -979,13 +1054,37 @@ private fun BottomCapturePanel(
                 val extraLabel = if (stage == CaptureStage.STAGE_2_CLOSEUP && snapshot.eyeDistancePx != null) {
                     "眼距 ${snapshot.eyeDistancePx.roundToInt()}px"
                 } else {
-                    "环绕 ${orientation.coveredCount}/12 格"
+                    val expoTag = when (snapshot.exposureStatus) {
+                        ExposureStatus.GOOD -> "光照 ✓"
+                        ExposureStatus.BACKLIT -> "逆光预警"
+                        ExposureStatus.UNDEREXPOSED -> "偏暗预警"
+                        ExposureStatus.OVEREXPOSED -> "过曝预警"
+                    }
+                    val parallaxTag = when {
+                        snapshot.orbitMotionState == OrbitMotionState.WRIST_TWIST_SUSPECTED -> "扭手腕已拦截"
+                        orientation.wristTwistRejectedCount > 0 -> "视差 ✓(拦截${orientation.wristTwistRejectedCount})"
+                        else -> "视差 ✓"
+                    }
+                    val weakTag = if (orientation.weakSectorCount > 0) " · 黄格${orientation.weakSectorCount}个" else ""
+                    "环绕 ${orientation.coveredCount}/12 · $expoTag · $parallaxTag$weakTag"
                 }
                 Text(
                     text = "$distLabel  ·  $sharpLabel  ·  $extraLabel",
                     color = Color.White.copy(alpha = 0.80f),
                     style = MaterialTheme.typography.bodySmall
                 )
+                if (targetedReshootMode) {
+                    Text(
+                        text = if (targetedPatchDone) {
+                            "✓ 定向补拍格已全部达标，可直接结束用于模型增量优化"
+                        } else {
+                            "定向补拍中：请慢速拍绿罗盘上的橙色高亮格"
+                        },
+                        color = if (targetedPatchDone) Color(0xFF81C784) else Color(0xFFFFCC80),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             if (stage == CaptureStage.STAGE_2_CLOSEUP) {
@@ -1020,25 +1119,47 @@ private fun BottomCapturePanel(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (stage == CaptureStage.STAGE_1_OVERVIEW) {
-                    val stage1Ready = snapshot?.stage1ReadyForCloseup == true
-                    Button(
-                        onClick = onAdvanceToStage2,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (stage1Ready) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                        ),
-                        modifier = Modifier
-                            .weight(1.15f)
-                            .heightIn(min = 48.dp)
-                    ) {
-                        Text(if (stage1Ready) "✓ 外圈完成 · 进入推近" else "进入第 2 步：慢推近")
-                    }
-                    OutlinedButton(
-                        onClick = onFinish,
-                        modifier = Modifier
-                            .weight(0.85f)
-                            .heightIn(min = 48.dp)
-                    ) {
-                        Text("直接结束", color = Color.White)
+                    if (targetedReshootMode) {
+                        Button(
+                            onClick = onFinish,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (targetedPatchDone) Color(0xFF2E7D32) else Color(0xFFEF6C00)
+                            ),
+                            modifier = Modifier
+                                .weight(1.25f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text(if (targetedPatchDone) "✓ 补拍达标 · 结束导出" else "完成局部补拍")
+                        }
+                        OutlinedButton(
+                            onClick = onAdvanceToStage2,
+                            modifier = Modifier
+                                .weight(0.75f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text("推近细节", color = Color.White)
+                        }
+                    } else {
+                        val stage1Ready = snapshot?.stage1ReadyForCloseup == true
+                        Button(
+                            onClick = onAdvanceToStage2,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (stage1Ready) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text(if (stage1Ready) "✓ 外圈完成 · 进入推近" else "进入第 2 步：慢推近")
+                        }
+                        OutlinedButton(
+                            onClick = onFinish,
+                            modifier = Modifier
+                                .weight(0.85f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text("直接结束", color = Color.White)
+                        }
                     }
                 } else {
                     Button(
@@ -1095,7 +1216,7 @@ private fun PrepareCaptureContent(
             }
         }
 
-        // 上手 3 步卡，开拍前先看明白
+        // 上手 3 步卡，开拍前先看明白（按头部 / 衣物分别提醒实测防踩坑要点）
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
             modifier = Modifier.fillMaxWidth()
@@ -1105,9 +1226,15 @@ private fun PrepareCaptureContent(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text("3 步完成高质量采集（全程一镜到底，不要按停止）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text("① 退远 1.2–1.5 米：让人头/衣服完整放进屏幕虚线框", style = MaterialTheme.typography.bodySmall)
-                Text("② 缓慢绕一圈：被拍目标别动，连人带手机真正围绕目标走满一圈（别只站在原地扭手腕）", style = MaterialTheme.typography.bodySmall)
-                Text("③ 推近拍特写：点「进入第 2 步」凑到 40 厘米拍正脸与左右耳侧", style = MaterialTheme.typography.bodySmall)
+                if (config.targetType == CaptureTargetType.HEAD) {
+                    Text("① 退远 1.2–1.5 米 · 摘眼镜并避开强逆光：摘掉反光眼镜、闭口静止、长发贴肩，背窗侧向采光更清晰", style = MaterialTheme.typography.bodySmall)
+                    Text("② 25–40 秒匀速绕一圈：连人带手机走完 360°（别原地扭手腕），尽量缩短时长以减少头部晃动", style = MaterialTheme.typography.bodySmall)
+                    Text("③ 推近补五官与双耳：点「进入第 2 步」凑到 40 厘米拍正脸与左右 30° 侧脸（勿说话歪头）", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("① 退远 1.2–1.5 米 · 均匀柔光：将整件衣服完整装进虚线框且四周留白，避免纯黑死暗阴影", style = MaterialTheme.typography.bodySmall)
+                    Text("② 20–30 秒匀速绕一圈：保持衣物垂坠不动，拐角略停半秒防跳帧，走满正/侧/背 360°", style = MaterialTheme.typography.bodySmall)
+                    Text("③ 推近补结构细节：点「进入第 2 步」凑到 30–50 厘米拍清领口、袖口、下摆与面料纹理", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
@@ -1137,6 +1264,112 @@ private fun PrepareCaptureContent(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (config.targetType == CaptureTargetType.GARMENT) {
+                    Text("防遮挡拍摄方式", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GarmentCapturePosture.entries.forEach { posture ->
+                            FilterChip(
+                                selected = config.garmentPosture == posture,
+                                onClick = { onConfigChange(config.copy(garmentPosture = posture)) },
+                                label = { Text(posture.label) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = config.garmentPosture.tip,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        if (config.targetType == CaptureTargetType.GARMENT) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (config.isTargetedReshoot) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("已有模型局部缺块 / 模糊定向补拍", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                "无需重拍一整圈，只勾选缺块或模糊部位即可导出局部增量补拍短片",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = config.isTargetedReshoot,
+                            onCheckedChange = { checked ->
+                                val regions = if (checked && config.defectRegions.isEmpty()) {
+                                    setOf(ModelDefectRegion.RIGHT_SEAM)
+                                } else {
+                                    config.defectRegions
+                                }
+                                onConfigChange(config.copy(isTargetedReshoot = checked, defectRegions = regions))
+                            }
+                        )
+                    }
+
+                    if (config.isTargetedReshoot) {
+                        Text("1) 问题类型", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ModelDefectKind.entries.forEach { kind ->
+                                FilterChip(
+                                    selected = config.defectKind == kind,
+                                    onClick = { onConfigChange(config.copy(defectKind = kind)) },
+                                    label = { Text(kind.label) }
+                                )
+                            }
+                        }
+
+                        Text("2) 选择需要优化的部位（可多选）", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ModelDefectRegion.entries.forEach { region ->
+                                val selected = region in config.defectRegions
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = {
+                                        val next = if (selected) {
+                                            config.defectRegions - region
+                                        } else {
+                                            config.defectRegions + region
+                                        }
+                                        onConfigChange(config.copy(defectRegions = next))
+                                    },
+                                    label = { Text(region.label) }
+                                )
+                            }
+                        }
+
+                        val targetSectors = config.resolvedTargetSectors()
+                        if (targetSectors.isNotEmpty()) {
+                            Text(
+                                text = "定向补拍提示：只需补齐罗盘中 ${targetSectors.size} 个橙色高亮扇区（${config.defectRegions.joinToString("；") { it.guideHint }}）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -1280,13 +1513,21 @@ private fun PrepareCaptureContent(
             }
         }
 
+        val canStartTargeted = !config.isTargetedReshoot || config.resolvedTargetSectors().isNotEmpty()
         Button(
             onClick = onStartCapture,
+            enabled = canStartTargeted,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 52.dp)
         ) {
-            Text("开始一镜到底采集")
+            val btnText = if (config.targetType == CaptureTargetType.GARMENT && config.isTargetedReshoot) {
+                val n = config.resolvedTargetSectors().size
+                if (n > 0) "开始局部定向补拍（仅补 $n 格）" else "请至少选择一个缺陷部位"
+            } else {
+                "开始一镜到底采集"
+            }
+            Text(btnText)
         }
     }
 }
@@ -1294,10 +1535,12 @@ private fun PrepareCaptureContent(
 @Composable
 private fun CaptureResultContent(
     response: CaptureGuideResponse,
+    reshootPlan: TargetedReshootPlan,
     savedVideoUri: String?,
     recordError: String?,
     onSpeakResult: () -> Unit,
     onRetakeMissingArcs: () -> Unit,
+    onStartFullRetake: () -> Unit,
     onRestartFull: () -> Unit,
     onBackHome: () -> Unit
 ) {
@@ -1407,14 +1650,30 @@ private fun CaptureResultContent(
             Text("语音播报补拍清单")
         }
 
-        if (!response.isPass) {
+        if (reshootPlan.canUseIncrementalPatch) {
             Button(
                 onClick = onRetakeMissingArcs,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF6C00)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 48.dp)
+                    .heightIn(min = 50.dp)
             ) {
-                Text("一键针对缺口角度重拍")
+                Text("一键按 AI 建议定向补拍（仅补 ${reshootPlan.targetSectors.size} 格 · 保留原片）")
+            }
+        } else if (!response.isPass) {
+            Button(
+                onClick = onStartFullRetake,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 50.dp)
+            ) {
+                val fullText = if (!response.guide.canReuseExisting) {
+                    "按建议完整重拍（原片不可复用）"
+                } else {
+                    "按建议重新录制完整环绕"
+                }
+                Text(fullText)
             }
         }
 
