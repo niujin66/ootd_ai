@@ -926,11 +926,11 @@ def build_fig6() -> Path:
             "- 跳过项：test_symlink_escape_rejected (Windows)",
             "- 涵盖导入门禁、SHA 校验、30+20 AI 评测工具",
         ], TEAL),
-        ("Android 端编译与 JVM 单测（68 项）", [
-            "- 12 个测试类 68 项全通过（JUnitCore 实跑）",
+        ("Android 编译与全量单测（83 项）", [
+            "- 14 个测试类 83 项全通过（JUnitCore 实跑）",
             "- 覆盖 CatalogParser、GlbProbe、GlbSanitizer、",
-            "  PublishGate、CaptureGuide、DirectDeepSeek 等",
-            "- APK 瘦身 (arm64-v8a) 与 20 次换衣采样按表收口",
+            "  PublishGate、视差/曝光门控与局部定向补拍",
+            "- 另有重建端 reconstruction/tests 3 项全过",
         ], GREEN),
     ]
     vx0, vw, vgap = 50, 540, 40
@@ -944,8 +944,145 @@ def build_fig6() -> Path:
             yy += 52
         vx0 += vw + vgap
 
-    c.footer("依据：android/app/src/main/java/com/ootd/ai/{data,ui}、server/tests（105 项）及 Android JUnitCore（68 项）实测。")
+    c.footer("依据：android/app/src/main/java/com/ootd/ai/{capture,data,ui}、server/tests（105 项）、reconstruction/tests（3 项）及 Android JUnitCore（83 项）。")
     out = FIGURES_DIR / "fig6_reliability_engineering.png"
+    c.save(out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Figure 7: Capture Quality Gate & Incremental Reshoot Refinement
+# ---------------------------------------------------------------------------
+def build_fig7() -> Path:
+    c = Canvas(1800, 1020)
+    c.header(
+        "图 7  端侧采集质控升级与无位姿“增量补拍”闭环实测对比",
+        "挂拍防遮挡 + 曝光/逆光/视差门控 + AI 建议一键定向补拍 + SuperPoint/LightGlue/PnP 局部纹理融合",
+    )
+
+    # Left Column: Android capture quality gate chain
+    c.rect((48, 130, 600, 962), fill=CARD_BG, outline=BLUE, width=2.0, radius=14)
+    c.rect((48, 130, 600, 180), fill=BLUE, outline=None, radius=14)
+    c.rect((48, 162, 600, 180), fill=BLUE, outline=None, radius=0)
+    c.text((324, 155), "一、Android 采集质控与一键定向补拍", size=18, bold=True, fill="#FFFFFF", anchor="mm")
+
+    android_steps = [
+        ("1. 筹备防遮挡姿势引导", "默认推荐衣架挂拍（HANGER），从源头消除手臂对侧缝与腋下的遮挡。", TEAL, GREEN_SOFT),
+        ("2. 实时灰度曝光 / 逆光告警", "连续 2 帧检出过暗、过曝或高对比逆光即黄灯纠偏，拦截废帧亮灯。", AMBER, AMBER_SOFT),
+        ("3. 防扭手腕视差门控", "OrbitParallaxDetector 监测前景/背景视差比 <= 0.35 判定原地旋转并拦截。", RED, RED_SOFT),
+        ("4. 三色+橙 12 扇区罗盘", "灰未采 / 黄需补 / 绿达标 / 橙目标缺口，补拍片段加注 OOTD_patch_。", SKY, SKY_SOFT),
+        ("5. AI 质检一键跳转补拍", "needs_reshoot+可复用直接带入缺失与黄格；invalid_retake 强制重拍。", BLUE, BLUE_SOFT),
+    ]
+    ay = 200
+    for idx, (st_t, st_b, acc, soft) in enumerate(android_steps):
+        c.rect((68, ay, 580, ay + 122), fill=soft, outline=acc, width=1.4, radius=12)
+        c.text((86, ay + 20), st_t, size=15.5, bold=True, fill=acc)
+        c.wrap_text((86, ay + 50), st_b, 476, size=13, fill=BODY_TEXT, line_gap=4)
+        if idx < len(android_steps) - 1:
+            c.arrow((324, ay + 122), (324, ay + 138), fill=acc, width=2.0, head_len=8, head_w=5)
+        ay += 140
+
+    c.rect((68, 902, 580, 946), fill=GREEN_SOFT, outline=GREEN, width=1.4, radius=10)
+    c.text((324, 924), "验证：14 类 83 项 JVM 单测全通过 · :app:assembleDebug 通过", size=13.5, bold=True, fill=GREEN, anchor="mm")
+
+    # Right Top: Pose-free incremental reshoot pipeline
+    c.rect((628, 130, 1752, 468), fill=CARD_BG, outline=PURPLE, width=2.0, radius=14)
+    c.rect((628, 130, 1752, 180), fill=PURPLE, outline=None, radius=14)
+    c.rect((628, 162, 1752, 180), fill=PURPLE, outline=None, radius=0)
+    c.text((1190, 155), "二、模型端：缺损自动诊断与无位姿增量补拍纹理融合管线", size=18, bold=True, fill="#FFFFFF", anchor="mm")
+
+    pipe_nodes = [
+        ("1. 缺损自动诊断", "diagnose_model_defects\n输出 defect_report.json\n落盘 transfer_state.npz", NAVY, BLUE_SOFT),
+        ("2. 离线 SegFormer", "本地自动服装/人体分割\n免手工抠图与防袖口染暗\n支持短视频抽帧输入", TEAL, GREEN_SOFT),
+        ("3. 无位姿 BFS 注册", "扫描原网格射线锚定 3D\n波前 LightGlue + PnP\n含相机半径异常护栏", BLUE, SKY_SOFT),
+        ("4. Lab 调色 + 双遍", "跨批次 Lab 光色一致化\nPass-2 剔除 >0.10 离群\n消除双影并保留织纹", AMBER, AMBER_SOFT),
+        ("5. 质量门控融合", "缺块填补 / 弱区升级\n原清晰区严格零漂移\n输出 patch_diff 与 GLB", GREEN, GREEN_SOFT),
+    ]
+    px0, pw, pgap = 650, 198, 22
+    for i, (pt, pb, acc, soft) in enumerate(pipe_nodes):
+        x0 = px0 + i * (pw + pgap)
+        x1 = x0 + pw
+        c.rect((x0, 200, x1, 392), fill=soft, outline=acc, width=1.6, radius=12)
+        c.rect((x0, 200, x1, 240), fill=acc, outline=None, radius=12)
+        c.rect((x0, 226, x1, 240), fill=acc, outline=None, radius=0)
+        c.text(((x0 + x1) / 2, 220), pt, size=14.5, bold=True, fill="#FFFFFF", anchor="mm")
+        yy = 258
+        for ln in pb.split("\n"):
+            c.text((x0 + 12, yy), "• " + ln, size=12.5, fill=BODY_TEXT)
+            yy += 40
+        if i < len(pipe_nodes) - 1:
+            c.arrow((x1 + 2, 296), (x1 + pgap - 2, 296), fill=acc, width=2.2)
+
+    c.rect((650, 410, 1730, 452), fill=SLATE_SOFT, outline=CARD_BORDER, width=1.2, radius=10)
+    c.text(
+        (1190, 431),
+        "核心优势：模型缺块或糊片时无需重走完整 360° 扫描重建，仅补拍缺失侧 10–15 帧即可精准修复且不伤原有正面印花",
+        size=13.5,
+        bold=True,
+        fill=NAVY,
+        anchor="mm",
+    )
+
+    # Right Bottom: Real top-003 quantitative benchmark
+    c.rect((628, 492, 1752, 962), fill=CARD_BG, outline=TEAL, width=2.0, radius=14)
+    c.rect((628, 492, 1752, 542), fill=TEAL, outline=None, radius=14)
+    c.rect((628, 524, 1752, 542), fill=TEAL, outline=None, radius=0)
+    c.text((1190, 517), "三、真实 top-003 大缺口增量补拍实测（留出背面 41 帧 -> 13 帧无位姿自动抠图融合）", size=17.5, bold=True, fill="#FFFFFF", anchor="mm")
+
+    # Bar chart comparing before vs after (%)
+    chart_x0, chart_y0, chart_x1, chart_y1 = 656, 566, 1200, 938
+    c.rect((chart_x0, chart_y0, chart_x1, chart_y1), fill=SLATE_SOFT, outline=CARD_BORDER, width=1.2, radius=12)
+    c.text((chart_x0 + 20, chart_y0 + 18), "补拍前后关键区域质量对照（%）", size=15, bold=True, fill=TITLE_TEXT)
+    # Legend
+    c.rect((chart_x0 + 320, chart_y0 + 18, chart_x0 + 340, chart_y0 + 34), fill="#94A3B8", radius=4)
+    c.text((chart_x0 + 346, chart_y0 + 26), "补拍前", size=12.5, fill=SUB_TEXT, anchor="lm")
+    c.rect((chart_x0 + 420, chart_y0 + 18, chart_x0 + 440, chart_y0 + 34), fill=TEAL, radius=4)
+    c.text((chart_x0 + 446, chart_y0 + 26), "补拍融合后", size=12.5, bold=True, fill=TEAL, anchor="lm")
+
+    metrics = [
+        ("背面区域有效命中率 ↑", 34.59, 91.08, "+56.5%"),
+        ("外表面总体命中率 ↑", 57.75, 83.40, "+25.7%"),
+        ("全 UV 有效命中率 ↑", 31.60, 45.75, "+14.2%"),
+        ("背面低质量占比 ↓", 55.13, 16.66, "-38.5%"),
+    ]
+    bar_left = chart_x0 + 178
+    bar_max_w = 276
+    my = chart_y0 + 64
+    for m_lbl, v_before, v_after, delta_str in metrics:
+        c.text((chart_x0 + 18, my + 24), m_lbl, size=13, bold=True, fill=BODY_TEXT, anchor="lm")
+        # Before bar
+        w_b = max(6.0, bar_max_w * (v_before / 100.0))
+        c.rect((bar_left, my + 4, bar_left + w_b, my + 22), fill="#94A3B8", radius=4)
+        c.text((bar_left + w_b + 8, my + 13), f"{v_before:.1f}%", size=12, fill=SUB_TEXT, anchor="lm")
+        # After bar
+        w_a = max(6.0, bar_max_w * (v_after / 100.0))
+        after_col = AMBER if "↓" in m_lbl else TEAL
+        c.rect((bar_left, my + 28, bar_left + w_a, my + 46), fill=after_col, radius=4)
+        c.text((bar_left + w_a + 8, my + 37), f"{v_after:.1f}% ({delta_str})", size=12, bold=True, fill=after_col, anchor="lm")
+        my += 72
+
+    # KPI cards grid on the right (2 cols x 3 rows)
+    kpis = [
+        ("13 / 13 (100%)", "无位姿自动配准率\nPnP 误差 2.83–4.28 px", BLUE, BLUE_SOFT),
+        ("+97,862 px", "新填补缺失纹素\n另质量升级 51,471 px", TEAL, GREEN_SOFT),
+        ("0.000", "原清晰区最大漂移\n正面胸口 Logo 零改动", GREEN, GREEN_SOFT),
+        ("2.0 -> 9.0", "背面中位观测视角\n缺陷状态 missing -> ok", PURPLE, PURPLE_SOFT),
+        ("+0.241 dB", "全视角重投影 PSNR\n16.45 -> 16.691 dB", SKY, SKY_SOFT),
+        ("32.45", "重投影 Lab 色差 ΔE\n由 33.13 稳定下降", AMBER, AMBER_SOFT),
+    ]
+    kx0, ky0 = 1222, 566
+    kw, kh, kgap_x, kgap_y = 246, 114, 16, 16
+    for idx, (k_val, k_desc, acc, soft) in enumerate(kpis):
+        col_i = idx % 2
+        row_i = idx // 2
+        x0 = kx0 + col_i * (kw + kgap_x)
+        y0 = ky0 + row_i * (kh + kgap_y)
+        c.rect((x0, y0, x0 + kw, y0 + kh), fill=soft, outline=acc, width=1.4, radius=12)
+        c.text((x0 + 16, y0 + 18), k_val, size=21, bold=True, fill=acc)
+        c.wrap_text((x0 + 16, y0 + 54), k_desc, kw - 28, size=12.5, fill=BODY_TEXT, line_gap=3)
+
+    c.footer("依据：reconstruction/refine_texture_with_reshoot.py、top-003 留出 41 帧大缺口实测与 Android 83 项单测验证。")
+    out = FIGURES_DIR / "fig7_incremental_reshoot_and_quality_gate.png"
     c.save(out)
     return out
 
@@ -959,6 +1096,7 @@ def main() -> None:
         build_fig4,
         build_fig5,
         build_fig6,
+        build_fig7,
     ]
     for fn in builders:
         out = fn()

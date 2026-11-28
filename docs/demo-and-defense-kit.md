@@ -1,6 +1,6 @@
 # OOTD AI「写实全身 Demo」录屏分镜、答辩 PPT 大纲与冻结打包清单
 
-> 更新于 2026-11-27（北京时间），供 11/30 真机 Demo 录制及 12/1–12/15 参赛评审交付直接照单执行。所有引用图谱均位于 [`docs/figures/`](figures/)，均为脱敏图表，可直接用于 PPT 与答辩报告。
+> 更新于 2026-11-28（北京时间），供 11/30 真机 Demo 录制及 12/1–12/15 参赛评审交付直接照单执行。所有引用图谱均位于 [`docs/figures/`](figures/)，均为脱敏图表，可直接用于 PPT 与答辩报告。
 
 ---
 
@@ -13,8 +13,8 @@
 | **0:00–0:20** | 打开 App 首页，点击进入「三维试衣」等待模型加载完成 | 写实全身效果、从零拼装闭环 | 「大家好，这是 OOTD AI 移动端三维试衣原型。屏幕里是真人头部 2DGS 重建后与标准素体长裤鞋拼装出的写实全身数字人，整套模型仅 4.03 MB，在普通安卓手机上毫秒级渲染流畅拖动。」 |
 | **0:20–0:45** | 手指拖动数字人转一圈（正→侧→背→斜侧），再依次点击底部 3 件衣服（浅色短袖 / 深蓝 POLO / 长袖兜底版）快速切换 | 4 视角零穿模、3 衣切换防闪烁 | 「支持 360 度实时查看正侧背与领口袖口贴合。底部可以在三件实测上衣间顺畅切换，切换过程中采用双状态护栏，只有新衣解码 Ready 才上屏，绝不闪黑或丢人。」 |
 | **0:45–1:25** | 在推荐栏输入 `上班` + `优先浅色` 点击「推荐」展示【AI 推荐】高亮与自动换衣；再输入 `正式西装` 演示 `no_match` 拒答保留当前衣 | `Hy4-flash` 真实大模型、不乱猜拒答能力 | 「接入服务端 Hy4-flash 大模型推荐：输入『上班、优先浅色』，系统返回匹配上衣并展示推荐理由；当要求『正式西装』时，模型触发硬约束拒答并保持原衣，不胡乱硬配。」 |
-| **1:25–2:05** | 返回首页打开「3D 采集引导」，对桌面物体慢速绕行展示 12 扇区点亮、近景自动进入第 2 阶段并点击完成触发 AI 质检卡片 | CameraX 1080p、12 扇区、三态补拍指导 | 「针对三维采集难的问题，App 内置两段式采集引导：实时监测 12 扇区覆盖与局部清晰度，录制结束后直接返回结构化 AI 补拍结论（pass / invalid_retake / needs_reshoot），指导用户一次拍齐视角。」 |
-| **2:05–2:30** | 切到「故障保护」演练或口播说明（可选展示断网冷启动立刻恢复缓存目录） | 离线冷启动恢复与工程门禁 | 「所有远端包都要经过 SHA-256 校验、材质扩展净化和真解码探测后才切换并写入生效指针。断网冷启动也能秒恢复上次资产，30+20 AI 评测实现 50/50 协议有效、0 违规。」 |
+| **1:25–2:05** | 返回首页打开「3D 采集引导」：选择衣物衣架挂拍，绕行展示曝光/视差防扭手腕门控、三色扇区与 AI 诊断「一键按建议定向补拍（橙格 + `OOTD_patch_`）」 | CameraX 1080p、防扭/曝光门控、AI 一键局部补拍 | 「针对三维采集难和局部缺块问题，App 内置实时曝光与光流视差防扭手腕门控，用灰/黄/绿三色标定扇区质量；若 AI 质检发现缺口，可一键按建议开启橙色定向补拍并直连无位姿局部贴图修复，无需从头重拍。」 |
+| **2:05–2:30** | 切到「故障保护」演练或口播说明（可选展示断网冷启动立刻恢复缓存目录） | 离线冷启动恢复与工程门禁 | 「所有远端包都要经过 SHA-256 校验、材质扩展净化和真解码探测后才切换并写入生效指针。断网冷启动也能秒恢复上次资产，后端 105 项 + 重建 3 项 + Android 83 项单测全通过。」 |
 
 ---
 
@@ -27,10 +27,10 @@
 | **P3** | 三端协同总体架构 | Android（采集引导 + Filament）↔ FastAPI（发布门禁 + 双模 AI）↔ 离线 V9（2DGS + 全身拼装） | [`fig1_system_architecture.png`](figures/fig1_system_architecture.png) |
 | **P4** | 核心技术 1：V9 多先验融合重建 | SuperPoint+LightGlue 双阶段 SfM、SegFormer+BiRefNet+DA2 先验、2DGS 7k、Open3D 2048px 烘焙与颈裁对齐（head-v9 `3.36 MB`） | [`fig2_v9_reconstruction_pipeline.png`](figures/fig2_v9_reconstruction_pipeline.png) |
 | **P5** | 创新实证 1：App 引导 vs 无引导消融 | 同目标实拍 60 帧：`pycolmap` 配准率 `80.0% -> 91.7%`，点云 `+49.7%`，2DGS PSNR `19.710 -> 23.751 dB (+4.041 dB)`，LPIPS 降 `19.9%` | [`fig3_capture_ablation_trajectory.png`](figures/fig3_capture_ablation_trajectory.png) |
-| **P6** | 核心技术 2：止损闸门与全身拼装 | `top-003` 穿身扫描诊断（`1021` 碎块 / `0.543` 厚度比）果断切换 B 路线模板改形（`1.08 MB`, `C_half 54.36 cm`）；合成 `fixture-face-04`（`6.69 MB`, 4/4 clean） | [`fig5_modeling_comparison_tradeoff.png`](figures/fig5_modeling_comparison_tradeoff.png) |
-| **P7** | 核心技术 3：双模 AI 推荐与补拍指导 | 严格协议校验、每日先占后判配额、12 s 熔断、`invalid_retake` 禁止复用硬约束 | [`fig1_system_architecture.png`](figures/fig1_system_architecture.png)（局部高亮中列） |
+| **P6** | 核心技术 2：止损闸门、拼装与纹理迁移 v2 | `top-003` 穿身扫描诊断切换模板+纹理迁移 v2（`72.0°` 软蒙皮配准 IoU `0.8105`，`1.08 MB` 兜底版与合成 `fixture-face-04` `6.69 MB`, 4/4 clean） | [`fig5_modeling_comparison_tradeoff.png`](figures/fig5_modeling_comparison_tradeoff.png) |
+| **P7** | 创新升级：端侧质控与无位姿增量补拍闭环 | 衣架挂拍+曝光/防扭手腕门控+三色扇区+AI 一键定向补拍；`top-003` 留出背面 41 帧实测：13 帧无位姿 `LightGlue+PnP` 100% 配准，背面命中 `34.6% -> 91.1%`，原清晰区 `0.0` 漂移 | [`fig7_incremental_reshoot_and_quality_gate.png`](figures/fig7_incremental_reshoot_and_quality_gate.png) |
 | **P8** | 创新实证 2：30+20 真实大模型评测 | C 侧共享后端 `Hy4-flash` 实测：推荐 30/30 + 引导 20/20，协议有效 `100%`、条件违反 `0.0%`、502/503 为 `0`，与 Mock 毫秒基线同屏对照 | [`fig4_ai_benchmark_30_20.png`](figures/fig4_ai_benchmark_30_20.png) |
-| **P9** | 工程质量：端云可靠性与发布闭环 | 下载暂存 → SHA 复核 → `GlbSanitizer`（剥离 Filament 致命扩展）→ `GlbProbe` → `PublishGate` → `PackageDirSwap`；后端 105 项 + Android 68 项单测 | [`fig6_reliability_engineering.png`](figures/fig6_reliability_engineering.png) |
+| **P9** | 工程质量：端云可靠性与发布闭环 | 下载暂存 → SHA 复核 → `GlbSanitizer` → `GlbProbe` → `PublishGate` → `PackageDirSwap`；后端 105 项 + 重建 3 项 + Android 83 项单测 | [`fig6_reliability_engineering.png`](figures/fig6_reliability_engineering.png) |
 | **P10** | 真机实测演示视频 | 现场播放 2 分 30 秒全身 3 衣试穿、AI 推荐与 3D 采集引导实录视频（Xiaomi 真机实录） | 11/30 录制的真机 MP4 视频 |
 | **P11** | 测试总结与诚实边界 | 不把 Mock 写为真实 AI、不把模板改形写为扫描直出、遗留领圈 2–4 mm 微贴合与设备性能实测如实披露 | 对照汇总表（引自《项目测试文档》） |
 | **P12** | 总结与未来规划 | 总结四大成果与后续迭代路线（分离挂拍免粘连扫衣、多部位换装槽位、云端异步队列重建） | Q&A 致谢页 |

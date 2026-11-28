@@ -54,7 +54,8 @@ NAMESPACES = {
 for prefix, uri in NAMESPACES.items():
     ET.register_namespace(prefix, uri)
 
-SECTION_MARKER = "【2026-11-27 参赛收口图表与实证同步】"
+SECTION_MARKER = "【2026-11-28 参赛收口图表与实证同步】"
+SECTION_PREFIX_SUBSTR = "参赛收口图表与实证同步】"
 
 
 def _qn(ns: str, tag: str) -> str:
@@ -155,7 +156,7 @@ def _strip_previous_marker_section(body: ET.Element) -> None:
     children = list(body)
     start_idx = None
     for idx, child in enumerate(children):
-        if child.tag == _qn(W_NS, "p") and SECTION_MARKER in _p_text(child):
+        if child.tag == _qn(W_NS, "p") and SECTION_PREFIX_SUBSTR in _p_text(child):
             start_idx = idx
             break
     if start_idx is None:
@@ -319,45 +320,49 @@ def main() -> None:
     fig4 = FIGURES_DIR / "fig4_ai_benchmark_30_20.png"
     fig5 = FIGURES_DIR / "fig5_modeling_comparison_tradeoff.png"
     fig6 = FIGURES_DIR / "fig6_reliability_engineering.png"
+    fig7 = FIGURES_DIR / "fig7_incremental_reshoot_and_quality_gate.png"
 
     jobs = [
         (
             COMP_DIR / "待填-技术研究报告.docx",
-            "核心管线流程、实测消融轨迹与 top-003 建模路线实证",
+            "核心管线流程、实测消融轨迹、纹理迁移 v2 与增量补拍实证",
             [
-                "为支撑技术评审直观核验，本节集中补入系统 V9 重建管线架构、无引导 vs App 引导 COLMAP 轨迹消融四联图，以及 top-003 建模路线实测对比与止损打包数据。",
-                "截至 2026-11-27，A 侧已完成 V9 写实头部（head-v9-neckcut-aligned-1024.glb，3.36 MB）与躯干+长裤鞋拼装，生成 person-001_v2.glb（4.03 MB）及模板改形兜底长袖版 top-003.glb（1.08 MB，C_half=54.36 cm，容差 +1.36 cm），合成 fixture-face-04 整包 6.69 MB 且过 export_glb_guard.py check 4/4 clean。",
+                "为支撑技术评审直观核验，本节集中补入系统 V9 重建管线架构、无引导 vs App 引导 COLMAP 轨迹消融四联图、top-003 建模路线与纹理迁移 v2 实测对比，以及 11/28 新增的“采集质控门控 + 无位姿增量补拍”闭环对比。",
+                "截至 2026-11-28，A 侧已完成 V9 写实头部（head-v9-neckcut-aligned-1024.glb，3.36 MB）与躯干+长裤鞋拼装，生成 person-001_v2.glb（4.03 MB）、模板改形兜底长袖版 top-003.glb（1.08 MB，C_half=54.36 cm）及 Scan-to-Template v2 纹理迁移（2048px 轮廓 IoU=0.8105、PSNR +5.499 dB）；并在 top-003 留出 41 帧背面大缺口上验证了 13 帧无位姿 LightGlue+PnP 增量补拍：13/13 (100%) 配准，背面命中率 34.6% -> 91.1%，原清晰区漂移 0.0。",
             ],
             [
                 (fig2, "附图 1：V9 真人头部与服装三维重建全链路及止损决策流程"),
                 (fig3, "附图 2：无引导 vs App 实时引导消融实验真实 COLMAP 轨道与 2DGS 指标对比"),
                 (fig5, "附图 3：三维服装建模路线实测对比、止损诊断与 fixture-face-04 体积构成"),
+                (fig7, "附图 4：端侧采集质控升级与无位姿增量补拍闭环实测对比"),
             ],
             [],
         ),
         (
             COMP_DIR / "待填-作品创新性分析报告.docx",
-            "三端协同架构图谱、引导轨迹实证与真实大模型全量评测对比",
+            "三端协同架构图谱、引导轨迹实证、增量补拍闭环与真实大模型评测",
             [
-                "以下三幅实证图谱分别对应本作品三大核心创新点：①「端-云-重建」闭环门禁与写实全身拼装架构；② App 12 扇区引导对 COLMAP 空间配准与 2DGS 新视角合成（+4.041 dB PSNR）的真实增益；③ 共享后端真实大模型（Hy4-flash）30+20 全量零违反语义交互评测。",
+                "以下四幅实证图谱分别对应本作品四大核心创新点：①「端-云-重建」闭环门禁与写实全身拼装架构；② App 12 扇区引导对 COLMAP 配准与 2DGS 新视角合成（+4.041 dB PSNR）的真实增益；③ 采集端曝光/防扭手腕门控 + AI 一键定向补拍与无位姿局部增量融合（背面命中 34.6% -> 91.1%）；④ 共享后端真实大模型（Hy4-flash）30+20 全量零违反语义交互评测。",
             ],
             [
                 (fig1, "附图 1：OOTD AI 端-云-重建三端协同系统架构"),
                 (fig3, "附图 2：无引导 vs App 实时引导真实 COLMAP 相机轨迹与 2DGS 渲染质量对比"),
-                (fig4, "附图 3：共享测试后端 30+20 AI 接口全量评测统计（Hy4-flash vs Mock）"),
+                (fig7, "附图 3：端侧质控升级与无位姿“增量补拍”闭环实测对比"),
+                (fig4, "附图 4：共享测试后端 30+20 AI 接口全量评测统计（Hy4-flash vs Mock）"),
             ],
             [],
         ),
         (
             COMP_DIR / "待填-项目开发文档.docx",
-            "三端协同架构、V9 开发流水线与端云可靠性闭环图谱",
+            "三端协同架构、V9 增量补拍流水线与端云可靠性闭环图谱",
             [
-                "截至 2026-11-27，C 侧已部署共享测试后端（OOTD_AI_MODE=ai，Hy4-flash）并完成 30+20 真实模型全量压测（50/50 有效、0 违反）；A 侧已按合龙方案交出 fixture-face-04 三衣写实全身包（6.69 MB，4/4 clean）；Android 数据层（CatalogParser / RemotePackageRepository / ActiveAssets）已核验原生支持任意数量可用衣物列表，试衣 UI 多衣横向列表收口正按 11/28–29 计划推进。",
+                "截至 2026-11-28，C 侧已部署共享测试后端（OOTD_AI_MODE=ai，Hy4-flash）并完成 30+20 真实模型全量压测（50/50 有效、0 违反）；A 侧已按合龙方案交出 fixture-face-04 三衣写实全身包（6.69 MB，4/4 clean），并在采集引导与重建端新增挂拍防遮挡、曝光/防扭手腕门控、AI 一键定向补拍（OOTD_patch_）及无位姿增量纹理优化脚本 refine_texture_with_reshoot.py。",
             ],
             [
                 (fig1, "附图 1：OOTD AI 端-云-重建三端协同系统架构"),
                 (fig2, "附图 2：V9 真人头部与服装三维重建开发流水线及全身拼装产出"),
-                (fig6, "附图 3：端-云可靠性工程防线与发布治理闭环（E01–E04 / R01–R09）"),
+                (fig7, "附图 3：端侧防扭/曝光门控与重建无位姿增量补拍融合流水线"),
+                (fig6, "附图 4：端-云可靠性工程防线与发布治理闭环（E01–E04 / R01–R09）"),
             ],
             [
                 (
@@ -369,15 +374,17 @@ def main() -> None:
         ),
         (
             COMP_DIR / "待填-项目测试文档.docx",
-            "可视化评测统计图、端云可靠性防线与 03b 双签 / 04 门禁摘要（修订 0.4）",
+            "可视化评测统计图、增量补拍定量实测与端云可靠性基线（修订 0.5）",
             [
-                "说明：本节完整保留上方表 C / 表 D / 表 E 真实大模型（Hy4-flash）实测数据，并补入两张量化可视化图表与 11/27 03b 双签 / fixture-face-04 导入门禁核验结论：",
-                "• 03b 双签闭合（2026-11-27）：A 侧 11/24 签收与 C 侧 11/27 会签正式闭合，content_digest = f0c05a0d8b86a8bf… 四来源逐项一致，两件通过（遗留微贴合如实登记）。",
-                "• fixture-face-04 门禁就绪（2026-11-27）：person-001_v2 (4.03 MB) + 三件上衣合计 6.69 MB，export_glb_guard.py check 4/4 clean；导入时须显式加 --expected-garments 3。",
+                "说明：本节完整保留上方表 C / 表 D / 表 E 真实大模型（Hy4-flash）实测数据，并补入量化可视化图表与截至 11/28 的全量自动化测试与实测结论：",
+                "• 全量自动化基线（2026-11-28）：后端 server/tests 105 项（104 通过、1 Windows 符号链接跳过、0 失败）+ 重建 reconstruction/tests 3 项全通过 + Android JUnitCore 14 类 83 项全通过，:app:assembleDebug 构建通过。",
+                "• 增量补拍大缺口实测（2026-11-28）：top-003 留出 41 帧背面后，13 帧无位姿自动抠图补拍 100% 配准，背面命中 34.6% -> 91.1%（status=ok），新填补 97,862 纹素，原清晰区漂移 0.0。",
+                "• 03b 双签闭合与 fixture-face-04 门禁就绪（2026-11-27）：person-001_v2 (4.03 MB) + 三衣合计 6.69 MB，export_glb_guard.py check 4/4 clean；导入时须显式加 --expected-garments 3。",
             ],
             [
                 (fig4, "附图 1：共享测试后端 Hy4-flash 真实模型 vs Mock 基线 30+20 评测统计图"),
-                (fig6, "附图 2：端-云可靠性防护链与自动化测试基线（后端 105 项 / Android 68 项）"),
+                (fig7, "附图 2：端侧质控升级与 top-003 无位姿增量补拍实测效果对比"),
+                (fig6, "附图 3：端-云可靠性防护链与全量自动化测试基线（后端 105 / 重建 3 / Android 83）"),
             ],
             [
                 (
@@ -389,13 +396,15 @@ def main() -> None:
         ),
         (
             COMP_DIR / "待填-AI辅助编程交互记录文档.docx",
-            "11 月 27 日收口协同记录：实测图谱自动化生成与全套参赛文档同步",
+            "11 月 27–28 日收口协同记录：图谱生成、增量补拍闭环与文档同步",
             [
-                "4. 从零实现零重依赖高清图谱生成与 OOXML 无损回填：针对赛前冲刺多份文档缺图且口径分散的问题，队长协同 AI 编写纯 Pillow/NumPy 双倍超采样绘图工具读取真实 COLMAP images.bin 相机外参、PR #49 实测统计与 Issue #13 几何度量生成 6 张脱敏高清配图，并以标准 OOXML 节点方式幂等写入五份参赛文档（严格保护原有页眉页脚及 PR #49 表 C/D/E 表格）。",
+                "4. 从零实现零重依赖高清图谱生成与 OOXML 无损回填：团队协同 AI 编写纯 Pillow/NumPy 双倍超采样绘图工具读取真实 COLMAP 位姿、PR #49 实测统计、Issue #13 几何度量及 11/28 增量补拍对比实测生成 7 张脱敏高清配图，并以标准 OOXML 节点方式幂等写入五份参赛文档（严格保护原有页眉页脚及 PR #49 表 C/D/E 表格）。",
+                "5. 端侧-重建闭环联动：AI 辅助设计“衣架挂拍 + 曝光/逆光/视差门控 + 三色扇区 + AI 一键定向补拍 -> SuperPoint+LightGlue+PnP 无位姿融合”完整闭环，全链路新增单测全部实跑通过。",
             ],
             [
                 (fig4, "附图 1：AI 辅助生成的 30+20 接口评测统计可视化图"),
                 (fig5, "附图 2：AI 辅助诊断后的建模路线对比与止损交付体量图"),
+                (fig7, "附图 3：AI 辅助实现的采集质控升级与增量补拍闭环对比图"),
             ],
             [],
         ),
