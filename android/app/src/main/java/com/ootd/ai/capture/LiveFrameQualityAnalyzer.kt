@@ -60,6 +60,21 @@ enum class CloseupCheckId(val label: String) {
     GARMENT_CUFF("袖口/面料纹理")
 }
 
+enum class ExposureStatus {
+    GOOD,
+    UNDEREXPOSED,
+    OVEREXPOSED,
+    BACKLIT
+}
+
+data class ExposureSnapshot(
+    val status: ExposureStatus,
+    val centerMeanLuma: Double,
+    val borderMeanLuma: Double,
+    val darkRatio: Double,
+    val brightRatio: Double
+)
+
 data class LiveQualitySnapshot(
     val stage: CaptureStage,
     val trafficLight: TrafficLight,
@@ -76,7 +91,12 @@ data class LiveQualitySnapshot(
     val stage1ReadyForCloseup: Boolean,
     val completedCloseups: Set<CloseupCheckId>,
     val missingCloseups: List<String>,
-    val analyzedFrames: Int
+    val analyzedFrames: Int,
+    val orbitMotionState: OrbitMotionState = OrbitMotionState.STATIONARY,
+    val parallaxGapPx: Double = 0.0,
+    val wristTwistRejectedFrames: Int = 0,
+    val exposureStatus: ExposureStatus = ExposureStatus.GOOD,
+    val frameQualityAcceptableForSector: Boolean = true
 )
 
 /**
@@ -93,8 +113,10 @@ class LiveFrameQualityAnalyzer(
 ) {
     private var stage: CaptureStage = CaptureStage.STAGE_1_OVERVIEW
     private var prev64Vector: FloatArray? = null
+    private val parallaxDetector = OrbitParallaxDetector()
 
     private var consecutiveBlurFrames = 0
+    private var consecutiveExposureBadFrames = 0
     private var analyzedFrameCount = 0
     private var lostSubjectFrames = 0
 
@@ -115,7 +137,9 @@ class LiveFrameQualityAnalyzer(
     fun reset(targetStage: CaptureStage = CaptureStage.STAGE_1_OVERVIEW) {
         stage = targetStage
         prev64Vector = null
+        parallaxDetector.reset()
         consecutiveBlurFrames = 0
+        consecutiveExposureBadFrames = 0
         analyzedFrameCount = 0
         lostSubjectFrames = 0
         sharpnessHistory.clear()
@@ -166,6 +190,13 @@ class LiveFrameQualityAnalyzer(
         if (ncc != null) {
             minContinuityNcc = minContinuityNcc?.let { min(it, ncc) } ?: ncc
         }
+        val parallax = parallaxDetector.analyze(frame, orientation?.relativeAzimuthDeg)
+        val exposure = evaluateExposure(frame)
+        if (exposure.status != ExposureStatus.GOOD) {
+            consecutiveExposureBadFrames += 1
+        } else {
+            consecutiveExposureBadFrames = 0
+        }
 
         val primaryFace = faces.maxByOrNull { (it.rightPx - it.leftPx) * (it.bottomPx - it.topPx) }
         val framing = evaluateFraming(frame, primaryFace)
@@ -212,6 +243,13 @@ class LiveFrameQualityAnalyzer(
         }
 
         val rollOk = orientation?.let { !it.isRollWarning } ?: true
+        val exposureOkForSector = exposure.status == ExposureStatus.GOOD
+        val frameQualityAcceptable = sharpness >= SHARP_OK_THRESHOLD &&
+            consecutiveBlurFrames == 0 &&
+            exposureOkForSector &&
+            rollOk &&
+            parallax.state != OrbitMotionState.WRIST_TWIST_SUSPECTED
+
         val stage1CoveredEnough = (orientation?.coveredCount ?: 0) >= STAGE1_READY_SECTOR_MIN
         val stage1Ready = stage == CaptureStage.STAGE_1_OVERVIEW &&
             stage1CoveredEnough &&
@@ -223,6 +261,8 @@ class LiveFrameQualityAnalyzer(
             orientation = orientation,
             sharpness = sharpness,
             ncc = ncc,
+            parallax = parallax,
+            exposure = exposure,
             framing = framing,
             eyeDistPx = eyeDistPx,
             stage1Ready = stage1Ready
@@ -256,7 +296,12 @@ class LiveFrameQualityAnalyzer(
             stage1ReadyForCloseup = stage1Ready,
             completedCloseups = completedCloseups.toSet(),
             missingCloseups = computeMissingCloseups(),
-            analyzedFrames = analyzedFrameCount
+            analyzedFrames = analyzedFrameCount,
+            orbitMotionState = parallax.state,
+            parallaxGapPx = parallax.parallaxGapPx,
+            wristTwistRejectedFrames = parallax.totalTwistRejectedFrames,
+            exposureStatus = exposure.status,
+            frameQualityAcceptableForSector = frameQualityAcceptable
         )
     }
 
@@ -402,6 +447,8 @@ class LiveFrameQualityAnalyzer(
         orientation: OrientationSnapshot?,
         sharpness: Double,
         ncc: Double?,
+        parallax: OrbitParallaxSnapshot,
+        exposure: ExposureSnapshot,
         framing: SubjectFraming,
         eyeDistPx: Double?,
         stage1Ready: Boolean
@@ -426,6 +473,43 @@ class LiveFrameQualityAnalyzer(
                 promptText = "手机拿歪了（斜了 ${abs(orientation.rollDeg).roundToInt()}°），请$tiltHint，让水平仪气泡回中间",
                 voiceKey = "roll"
             )
+        }
+        if (stage == CaptureStage.STAGE_1_OVERVIEW &&
+            parallax.state == OrbitMotionState.WRIST_TWIST_SUSPECTED
+        ) {
+            return FeedbackDecision(
+                trafficLight = TrafficLight.YELLOW,
+                framingStatus = framingStatus,
+                actionBadge = "别只扭手腕 · 迈步绕行",
+                promptText = "检测到原地扭手腕（前景与背景同速横移，缺乏空间视差），该角度未计入覆盖！请迈开脚步绕着目标走",
+                voiceKey = "wrist_twist"
+            )
+        }
+        if (consecutiveExposureBadFrames >= 2) {
+            when (exposure.status) {
+                ExposureStatus.BACKLIT -> return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = framingStatus,
+                    actionBadge = "逆光过强 · 换个朝向",
+                    promptText = "检测到强逆光（主体偏暗而背景刺眼），请背对窗户或打开正面补光灯后再拍该角度",
+                    voiceKey = "exposure_backlit"
+                )
+                ExposureStatus.UNDEREXPOSED -> return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = framingStatus,
+                    actionBadge = "光线太暗 · 请补光",
+                    promptText = "当前角度画面偏暗（容易丢失布料纹理），请开灯或移至明亮漫反射光源下拍摄",
+                    voiceKey = "exposure_dark"
+                )
+                ExposureStatus.OVEREXPOSED -> return FeedbackDecision(
+                    trafficLight = TrafficLight.YELLOW,
+                    framingStatus = framingStatus,
+                    actionBadge = "高光过曝 · 避开直射灯",
+                    promptText = "当前角度高光泛白过曝，请稍微避开强直射灯光或点击画面测光",
+                    voiceKey = "exposure_bright"
+                )
+                ExposureStatus.GOOD -> Unit
+            }
         }
         if (ncc != null && ncc < CONTINUITY_MIN_THRESHOLD) {
             return FeedbackDecision(
@@ -578,6 +662,63 @@ class LiveFrameQualityAnalyzer(
         const val MARGIN_MIN_PX = 40
         const val EYE_DETAIL_TARGET_PX = 20.0
         const val STAGE1_READY_SECTOR_MIN = 10
+        const val EXPOSURE_DARK_LUMA = 52.0
+        const val EXPOSURE_BACKLIT_DIFF = 55.0
+
+        /**
+         * 评估帧中心主体与背景环带的曝光与逆光情况（64x64 降采样，纯 Kotlin）。
+         */
+        fun evaluateExposure(frame: GrayFrame): ExposureSnapshot {
+            val size = 64
+            val yData = frame.yPlane
+            var cSum = 0.0
+            var cCount = 0
+            var cDark = 0
+            var cBright = 0
+            var bSum = 0.0
+            var bCount = 0
+
+            for (y in 0 until size) {
+                val srcY = (y * frame.height) / size
+                val srcRow = srcY * frame.width
+                val inCenterY = y in 12 until 52
+                val inBorderY = y < 8 || y >= 56
+                for (x in 0 until size) {
+                    val srcX = (x * frame.width) / size
+                    val v = (yData[srcRow + srcX].toInt() and 0xFF).toDouble()
+                    val inCenterX = x in 16 until 48
+                    val inBorderX = x < 10 || x >= 54
+                    if (inCenterX && inCenterY) {
+                        cSum += v
+                        cCount += 1
+                        if (v < 25.0) cDark += 1
+                        if (v > 245.0) cBright += 1
+                    } else if (inBorderX || inBorderY) {
+                        bSum += v
+                        bCount += 1
+                    }
+                }
+            }
+
+            val cMean = cSum / max(1, cCount)
+            val bMean = bSum / max(1, bCount)
+            val darkRatio = cDark.toDouble() / max(1, cCount)
+            val brightRatio = cBright.toDouble() / max(1, cCount)
+
+            val status = when {
+                (bMean - cMean) >= EXPOSURE_BACKLIT_DIFF && cMean < 115.0 -> ExposureStatus.BACKLIT
+                cMean < EXPOSURE_DARK_LUMA || darkRatio >= 0.35 -> ExposureStatus.UNDEREXPOSED
+                brightRatio >= 0.24 -> ExposureStatus.OVEREXPOSED
+                else -> ExposureStatus.GOOD
+            }
+            return ExposureSnapshot(
+                status = status,
+                centerMeanLuma = cMean,
+                borderMeanLuma = bMean,
+                darkRatio = darkRatio,
+                brightRatio = brightRatio
+            )
+        }
 
         /**
          * 直接基于 Y 平面计算 3x3 整数算子拉普拉斯方差（降采样到 <= 320x240）。

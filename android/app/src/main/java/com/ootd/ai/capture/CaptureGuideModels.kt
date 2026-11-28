@@ -51,6 +51,38 @@ data class MarginPx(
 )
 
 /**
+ * 衣物采集拍摄方式：衣架挂拍无手臂遮挡（推荐），穿身拍摄需提醒露出侧缝。
+ */
+enum class GarmentCapturePosture(val label: String, val tip: String) {
+    HANGER("衣架挂拍（推荐）", "衣架悬空挂拍，360° 无手臂遮挡侧缝与袖筒"),
+    WORN("穿身拍摄", "请微抬或张开双臂露出侧缝，勿叠穿深色长袖内搭")
+}
+
+/**
+ * 已生成模型常见缺陷部位与对应的 12 扇区定向补拍区。
+ */
+enum class ModelDefectRegion(
+    val label: String,
+    val targetSectors: Set<Int>,
+    val guideHint: String
+) {
+    FRONT("正面 / 胸口", setOf(0, 1, 11), "正对前胸 0° 附近慢速移动，保持清晰对焦"),
+    RIGHT_SEAM("右侧缝 / 腋下", setOf(2, 3, 4), "抬起右臂或挂拍露出右侧缝，慢拍右侧 60°–150°"),
+    BACK("背面 / 印花", setOf(5, 6, 7), "绕到正后方 150°–240° 均匀采光慢拍"),
+    LEFT_SEAM("左侧缝 / 腋下", setOf(8, 9, 10), "抬起左臂或挂拍露出左侧缝，慢拍左侧 240°–330°"),
+    SLEEVES("双袖筒 / 袖口", setOf(2, 3, 9, 10), "撑开或挂平袖筒，重点补拍左右 60°–120° 与 240°–300°"),
+    COLLAR("领口 / 肩线", setOf(0, 1, 11), "略俯拍 15° 并推近领口与肩线，拍清走线细节")
+}
+
+/**
+ * 已有模型需要补拍优化的问题类型。
+ */
+enum class ModelDefectKind(val label: String) {
+    MISSING_PATCH("缺块 / 遮挡"),
+    BLURRY_OR_DARK("模糊 / 发暗")
+}
+
+/**
  * 开拍前尺度与基础属性记录。
  * 身高/性别由用户输入或标定物辅助，不靠单目摄像头瞎猜绝对身高。
  */
@@ -59,8 +91,16 @@ data class CapturePrepConfig(
     val subjectLabel: String = "person-001",
     val heightCmInput: String = "",
     val genderNote: String = "未填写",
-    val hasScaleReference: Boolean = false
-)
+    val hasScaleReference: Boolean = false,
+    val garmentPosture: GarmentCapturePosture = GarmentCapturePosture.HANGER,
+    val isTargetedReshoot: Boolean = false,
+    val defectRegions: Set<ModelDefectRegion> = emptySet(),
+    val defectKind: ModelDefectKind = ModelDefectKind.MISSING_PATCH
+) {
+    fun resolvedTargetSectors(): Set<Int> {
+        return defectRegions.flatMap { it.targetSectors }.toSet()
+    }
+}
 
 /**
  * 发送给服务端 POST /v1/capture/guide 的结构化指标。
@@ -121,6 +161,13 @@ data class CaptureGuidePlan(
     val steps: List<CaptureGuideStep>
 )
 
+data class TargetedReshootPlan(
+    val canUseIncrementalPatch: Boolean,
+    val targetSectors: Set<Int>,
+    val inferredRegions: Set<ModelDefectRegion>,
+    val inferredDefectKind: ModelDefectKind
+)
+
 data class CaptureGuideResponse(
     val requestId: String,
     val targetType: String,
@@ -134,6 +181,56 @@ data class CaptureGuideResponse(
     val isMock: Boolean get() = mode == "mock"
     val isDirectAi: Boolean get() = mode == DirectDeepSeekCaptureGuide.MODE_DIRECT_AI
     val isOfflineFallback: Boolean get() = mode == "offline_fallback"
+
+    /**
+     * 将 AI / 离线质检建议与端侧三色黄格弱区映射到“局部定向补拍”配置，严格遵守 canReuseExisting 硬约束。
+     */
+    fun buildTargetedReshootPlan(weakSectors: Set<Int> = emptySet()): TargetedReshootPlan {
+        val missingIndices = OrientationSectorTracker.parseGapSectorIndices(
+            diagnosis.sectorSummary.missingArcs
+        )
+        val combinedSectors = (missingIndices + weakSectors)
+            .filter { it in 0 until OrientationSectorTracker.SECTOR_COUNT }
+            .toSet()
+
+        val inferredRegions = buildSet {
+            val baseRegions = listOf(
+                ModelDefectRegion.FRONT,
+                ModelDefectRegion.RIGHT_SEAM,
+                ModelDefectRegion.BACK,
+                ModelDefectRegion.LEFT_SEAM
+            )
+            baseRegions.forEach { region ->
+                if (region.targetSectors.any { it in combinedSectors }) {
+                    add(region)
+                }
+            }
+            val stepsText = guide.steps.joinToString(" ") { "${it.targetArea} ${it.action}" }
+            if (stepsText.contains("领口") || stepsText.contains("肩")) {
+                add(ModelDefectRegion.COLLAR)
+            }
+            if (stepsText.contains("袖")) {
+                add(ModelDefectRegion.SLEEVES)
+            }
+        }
+
+        val hasQualityIssue = diagnosis.issues.any {
+            it.code.contains("blur") || it.code.contains("dark") || it.code.contains("exposure")
+        }
+        val inferredDefectKind = if (missingIndices.isEmpty() && hasQualityIssue) {
+            ModelDefectKind.BLURRY_OR_DARK
+        } else {
+            ModelDefectKind.MISSING_PATCH
+        }
+
+        val canUseIncremental = !isPass && guide.canReuseExisting && combinedSectors.isNotEmpty()
+        return TargetedReshootPlan(
+            canUseIncrementalPatch = canUseIncremental,
+            targetSectors = combinedSectors,
+            inferredRegions = inferredRegions,
+            inferredDefectKind = inferredDefectKind
+        )
+    }
 }
 
 /**
